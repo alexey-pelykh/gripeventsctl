@@ -1,0 +1,26 @@
+# CLI <-> MCP parity exemptions
+#
+# Consumed by packages/gripeventsctl/src/__tests__/cli-mcp-parity.test.ts (lands with the first
+# commands). The parity gate asserts that every CLI leaf command has a matching
+# `gripeventsctl_<group>_<verb>` MCP tool and vice-versa. Surfaces that intentionally diverge are
+# declared here so they are NOT reported as drift.
+#
+#   cli_only:  CLI commands that intentionally have NO MCP tool.
+#   mcp_only:  MCP tools that intentionally have NO matching CLI command.
+#
+# Each `reason` is MANDATORY and surfaces in the parity report. A stale entry (referencing a
+# command or tool that no longer exists) fails the gate; keep this file pruned.
+
+cli_only:
+  # Authentication is an interactive, local credential-lifecycle surface. The MCP server is
+  # long-lived and consumes the session token already captured in the config file; it never
+  # signs in. There is no assistant-driven sign-in by design: the user runs sign-in, the password
+  # never passes through an assistant.
+  - command: "auth signin"
+    reason: "Interactive sign-in run by the user; CLI-only. The MCP server consumes the captured token, never signs in."
+  - command: "auth signout"
+    reason: "Local credential-lifecycle teardown; CLI-only."
+  - command: "auth status"
+    reason: "Local credential-lifecycle inspection; CLI-only."
+
+mcp_only: []
