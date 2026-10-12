@@ -10,7 +10,7 @@
   "license": "AGPL-3.0-only",
   "author": "Alexey Pelykh (https://github.com/alexey-pelykh)",
   "scripts": {
-    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "clean": "rm -rf dist *.tsbuildinfo",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",

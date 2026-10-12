@@ -15,9 +15,8 @@ build/
 # /cli and /mcp keep their own curated, tracked per-package READMEs.
 /packages/gripeventsctl/README.md
 
-# Grip session state written next to a run (the config file in the home directory
-# sits outside the repo). A session token must never be committed.
-.gripeventsctl/
+# A session token must never be committed, wherever a script writes it (the config
+# file in the home directory sits outside the repo).
 *.token
 
 # MCP Registry publisher tokens

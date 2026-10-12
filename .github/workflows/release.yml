@@ -174,8 +174,7 @@ jobs:
 
       # Pack workspace tarballs ahead of publish so we have a stable, on-disk
       # subject for `actions/attest-build-provenance`. Looped per published
-      # package because `pnpm pack` is not recursive in pnpm 9 (`-r pack`
-      # added in pnpm 10). The private `@gripeventsctl/e2e` package is intentionally
+      # package so every tarball lands in one directory. The private `@gripeventsctl/e2e` package is intentionally
       # excluded from the list. Each tarball is byte-identical to what
       # `pnpm -r publish` ships (same source tree, same `files` field), so
       # the SHA256 digest attested here matches the digest downstream
