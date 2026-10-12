@@ -22,6 +22,10 @@ verification rule from CLAUDE.md.
       was verified live, and the test plan below names the e2e test or transcript.
 - [ ] **No secrets**: no session token, chat token, password or captured response
       with personal data is in any committed file or fixture (`pnpm check-secret-leakage`).
+- [ ] **Oracles untouched**: if this PR implements an item that has pre-authored
+      `*.oracle.test.ts` files, the diff on those files is empty (or the PR links the
+      specification change that moved the assertion first), and `pnpm test:oracles` is green
+      for the item's files.
 
 ## Test plan
 

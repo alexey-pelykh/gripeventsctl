@@ -59,6 +59,19 @@ pnpm dev              # Watch mode
 `pnpm lint` is the pre-push gate. Run `pnpm format` to fix any Prettier
 issue, then run `pnpm lint` again.
 
+### Oracle tests
+
+An oracle test is a test written before the code it grades, by a different author than the one
+who writes that code. It is named `src/__tests__/<subject>.oracle.test.ts` and sits next to the
+unit tests. Each of its top-level `describe` titles starts with a capability tag in square
+brackets, such as `[CAP-GATE]`. The file probes its subject module at the top. `pnpm test` skips
+an oracle whose subject module is not built yet. It runs the oracle once the module exists, with no
+edit to the file and no configuration change. `pnpm test:oracles` runs every oracle file in strict
+mode, where a missing subject fails instead of skipping. That command is the done check for the
+item the oracles describe. A pull request that implements the code never edits an oracle file: its
+diff on `*.oracle.test.ts` is empty, or it links the specification change that moved the assertion
+first. A change to an oracle file is a specification change and is reviewed as one.
+
 ### Project Structure
 
 The repository is a pnpm monorepo with the following packages:
@@ -100,12 +113,13 @@ Each commit holds one logical change.
 
 ### Pull request gates
 
-The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has four gates. Answer each one in your pull request.
+The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has five gates. Answer each one in your pull request.
 
 1. **CLI/MCP parity**: a CLI command and its MCP tool stay coupled. If a change adds, renames or removes one side, change the other side too, or declare the difference in [`.mcp-exempt.yaml`](.mcp-exempt.yaml) with a reason.
 2. **Writes stay gated**: a call that notifies someone or changes something on the platform runs only behind the safe-mode gate, honours `--dry-run`, and appends to the send log.
 3. **Live verification**: a new or changed request shape against `api-prod.grip.events` needs the matching page under `docs/api/` to carry the date it was verified live. The test plan names the e2e test or transcript.
 4. **No secrets**: no session token, chat token, password or captured response with personal data goes into a committed file or fixture. `pnpm check-secret-leakage` checks this.
+5. **Oracles untouched**: a pull request that implements an item with pre-authored `*.oracle.test.ts` files leaves those files unchanged, or links the specification change that moved the assertion first. `pnpm test:oracles` is green for the item's files.
 
 ### Branch protection
 
