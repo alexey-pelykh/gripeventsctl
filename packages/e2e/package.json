@@ -1,0 +1,33 @@
+{
+  "name": "@gripeventsctl/e2e",
+  "version": "0.0.0",
+  "description": "E2E tests for GripEventsCtl against a live Grip event app session",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "AGPL-3.0-only",
+  "author": "Alexey Pelykh (https://github.com/alexey-pelykh)",
+  "scripts": {
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts --passWithNoTests",
+    "lint": "eslint src/ vitest.config.ts vitest.e2e.config.ts",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@gripeventsctl/cli": "workspace:^",
+    "@gripeventsctl/core": "workspace:^",
+    "@gripeventsctl/mcp": "workspace:^",
+    "yaml": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

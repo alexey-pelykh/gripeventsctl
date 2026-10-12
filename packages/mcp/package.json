@@ -1,0 +1,52 @@
+{
+  "name": "@gripeventsctl/mcp",
+  "version": "0.0.0",
+  "description": "GripEventsCtl MCP server exposing Grip event-app operations to AI assistants",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "AGPL-3.0-only",
+  "author": "Alexey Pelykh (https://github.com/alexey-pelykh)",
+  "homepage": "https://github.com/alexey-pelykh/gripeventsctl/tree/main/packages/mcp",
+  "bugs": "https://github.com/alexey-pelykh/gripeventsctl/issues",
+  "funding": "https://github.com/sponsors/alexey-pelykh",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexey-pelykh/gripeventsctl.git",
+    "directory": "packages/mcp"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "prepack": "cp ../../LICENSE ../../THIRD-PARTY-NOTICES.md .",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@gripeventsctl/core": "workspace:^",
+    "@modelcontextprotocol/sdk": "catalog:",
+    "zod": "catalog:"
+  }
+}

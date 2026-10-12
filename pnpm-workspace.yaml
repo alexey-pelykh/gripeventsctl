@@ -1,0 +1,36 @@
+packages:
+  - "packages/*"
+
+engineStrict: true
+autoInstallPeers: true
+linkWorkspacePackages: true
+
+# Every pin below was read from the npm registry on 2026-10-12 (`npm view <pkg> version`).
+catalog:
+  # Patch-only until typescript-eslint relaxes its peer ceiling (<6.1.0 as of typescript-eslint 8.71.1).
+  typescript: "~6.0.3"
+  "@types/node": "^26"
+  vitest: "^5.0.3"
+  "@vitest/coverage-v8": "^5.0.3"
+  "@eslint/js": "^10.0.1"
+  eslint: "^10.12.0"
+  prettier: "^3.9.10"
+  typescript-eslint: "^8.71.1"
+  eslint-config-prettier: "^10.1.8"
+  "@tony.ganchev/eslint-plugin-header": "^3.4.4"
+  "@modelcontextprotocol/sdk": "^1.32.1"
+  zod: "^4.6.6"
+  commander: "^15.0.0"
+  turbo: "^2.11.7"
+  "@clack/prompts": "^1.8.1"
+  "cli-table3": "^0.6.5"
+  yaml: "^2.9.1"
+  undici: "^8.11.2"
+  "proper-lockfile": "^4.1.2"
+  "@types/proper-lockfile": "^4.1.4"
+  tsx: "^4.23.15"
+
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - zod@4.6.6

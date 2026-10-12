@@ -1,0 +1,67 @@
+{
+  "name": "gripeventsctl",
+  "version": "0.0.0",
+  "description": "Unofficial CLI and MCP server for Grip-hosted event apps: attendee directory, profiles, interest swipes, chat and meetings",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "AGPL-3.0-only",
+  "author": "Alexey Pelykh (https://github.com/alexey-pelykh)",
+  "homepage": "https://github.com/alexey-pelykh/gripeventsctl",
+  "bugs": "https://github.com/alexey-pelykh/gripeventsctl/issues",
+  "funding": "https://github.com/sponsors/alexey-pelykh",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexey-pelykh/gripeventsctl.git",
+    "directory": "packages/gripeventsctl"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "bin": {
+    "gripeventsctl": "./dist/cli.js"
+  },
+  "mcpName": "io.github.alexey-pelykh/gripeventsctl",
+  "keywords": [
+    "grip",
+    "grip-events",
+    "event-networking",
+    "conference",
+    "attendees",
+    "cli",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol"
+  ],
+  "files": [
+    "dist",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "prepack": "cp ../../LICENSE ../../THIRD-PARTY-NOTICES.md ../../README.md .",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@gripeventsctl/cli": "workspace:^",
+    "@gripeventsctl/mcp": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "yaml": "catalog:"
+  }
+}

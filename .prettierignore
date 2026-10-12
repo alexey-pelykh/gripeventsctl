@@ -1,0 +1,10 @@
+dist/
+coverage/
+.turbo/
+.tmp/
+pnpm-lock.yaml
+**/__generated__/
+
+# prettier 3.9.x is non-idempotent on this file's nested list (its --write
+# output fails its own --check); GitHub renders the committed form correctly.
+.github/PULL_REQUEST_TEMPLATE.md

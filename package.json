@@ -1,0 +1,40 @@
+{
+  "name": "gripeventsctl-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@12.11.2",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "clean": "turbo run clean",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "turbo run test:e2e --concurrency=1",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "typecheck": "turbo run typecheck",
+    "lint": "pnpm format:check && turbo run lint && pnpm lint:root && pnpm check-secret-leakage && pnpm check-dep-confusion",
+    "lint:root": "eslint eslint.config.js vitest.config.ts vitest.e2e.config.ts scripts/",
+    "license-check": "node scripts/check-licenses.js",
+    "check-secret-leakage": "tsx scripts/check-secret-leakage.ts",
+    "check-dep-confusion": "tsx scripts/check-dep-confusion.ts",
+    "dev": "turbo run dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@tony.ganchev/eslint-plugin-header": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "prettier": "catalog:",
+    "tsx": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  }
+}

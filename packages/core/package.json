@@ -1,0 +1,61 @@
+{
+  "name": "@gripeventsctl/core",
+  "version": "0.0.0",
+  "description": "Core library for Grip-hosted event apps: API client, session handling, services",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "AGPL-3.0-only",
+  "author": "Alexey Pelykh (https://github.com/alexey-pelykh)",
+  "homepage": "https://github.com/alexey-pelykh/gripeventsctl/tree/main/packages/core",
+  "bugs": "https://github.com/alexey-pelykh/gripeventsctl/issues",
+  "funding": "https://github.com/sponsors/alexey-pelykh",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexey-pelykh/gripeventsctl.git",
+    "directory": "packages/core"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "keywords": [
+    "grip",
+    "grip-events",
+    "event-networking",
+    "api-client",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "prepack": "cp ../../LICENSE ../../THIRD-PARTY-NOTICES.md .",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/proper-lockfile": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "proper-lockfile": "catalog:",
+    "undici": "catalog:",
+    "yaml": "catalog:",
+    "zod": "catalog:"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "@gripeventsctl/cli",
+  "version": "0.0.0",
+  "description": "GripEventsCtl CLI commands and program definition",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "AGPL-3.0-only",
+  "author": "Alexey Pelykh (https://github.com/alexey-pelykh)",
+  "homepage": "https://github.com/alexey-pelykh/gripeventsctl/tree/main/packages/cli",
+  "bugs": "https://github.com/alexey-pelykh/gripeventsctl/issues",
+  "funding": "https://github.com/sponsors/alexey-pelykh",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alexey-pelykh/gripeventsctl.git",
+    "directory": "packages/cli"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "THIRD-PARTY-NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "prepack": "cp ../../LICENSE ../../THIRD-PARTY-NOTICES.md .",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src/",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "@clack/prompts": "catalog:",
+    "@gripeventsctl/core": "workspace:^",
+    "cli-table3": "catalog:",
+    "commander": "catalog:",
+    "yaml": "catalog:",
+    "zod": "catalog:"
+  }
+}
