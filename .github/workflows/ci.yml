@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  ci:
+    name: Build, Lint & Test (${{ matrix.os }}, node ${{ matrix.node-version }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # The declared engines.node minimum (22) and the current LTS (24). Loosening engines.node
+        # later is safe; tightening is a breaking change for consumers. Keep this matrix in sync
+        # with the value declared in every package.json "engines.node" field.
+        node-version: ["22", "24"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: pnpm format:check
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm license-check
+      - run: pnpm test
+
+  ci-gate:
+    name: CI
+    if: always()
+    permissions: {}
+    needs:
+      - ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: |
+          if [[ "${{ needs.ci.result }}" != "success" ]]; then
+            echo "CI failed: ${{ needs.ci.result }}"
+            exit 1
+          fi

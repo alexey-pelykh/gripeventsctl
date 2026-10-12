@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.alexey-pelykh/gripeventsctl",
+  "description": "Unofficial CLI and MCP server for Grip-hosted event apps: attendees, profiles, swipes and chat",
+  "repository": {
+    "url": "https://github.com/alexey-pelykh/gripeventsctl",
+    "source": "github"
+  },
+  "version": "0.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "gripeventsctl",
+      "version": "0.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": []
+    }
+  ]
+}

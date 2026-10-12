@@ -1,0 +1,119 @@
+name: "MCP host failed to invoke a tool"
+description: "An MCP host (Claude Desktop, Claude Code, Cursor, Windsurf, etc.) could not invoke a GripEventsCtl tool."
+title: "(mcp-host) <host product> failed to invoke <tool name>"
+labels: ["mcp-host-issue", "triage", "mcp"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template when the failure is at the **MCP host <-> GripEventsCtl server boundary**: the host did not
+        surface the tool, the tool's schema was rejected, or the host displayed an error that did not come from
+        Grip's wire.
+
+        If the tool ran and Grip returned an error, use the **"Wire broke for me"** template instead; that is a
+        wire-format issue, not an MCP-host issue.
+
+        ## Privacy
+
+        **Do not paste your `~/.gripeventsctl.yaml` contents, any value sent as `X-Authorization` (a 36-character
+        token), or the long chat token.** Redact them as `<REDACTED>`. Transcripts from your shell or host logs
+        may include them; scan before pasting.
+
+  - type: input
+    id: host-product
+    attributes:
+      label: MCP host product
+      description: "e.g. `Claude Desktop`, `Claude Code`, `Cursor`, `Windsurf`, custom host."
+      placeholder: "Claude Desktop"
+    validations:
+      required: true
+
+  - type: input
+    id: host-version
+    attributes:
+      label: MCP host version
+      description: "Version string the host reports (Settings -> About, or the menu equivalent)."
+      placeholder: "0.7.x"
+    validations:
+      required: true
+
+  - type: input
+    id: gripeventsctl-version
+    attributes:
+      label: GripEventsCtl version
+      description: "Output of `gripeventsctl --version`. If the host bundled GripEventsCtl, paste the version it shipped with."
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: tool-name
+    attributes:
+      label: Failing tool name
+      description: "The GripEventsCtl MCP tool that failed, e.g. `gripeventsctl_attendees_list`. Use `<unknown>` if the host did not surface a name."
+      placeholder: "gripeventsctl_attendees_list"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: failure-mode
+    attributes:
+      label: Failure mode
+      description: "How did the failure surface?"
+      options:
+        - "Tool never appeared in the host's tool list"
+        - "Tool appeared but the host refused to invoke it (schema rejected, permission denied, etc.)"
+        - "Tool was invoked but the host displayed a generic error / hung / timed out"
+        - "Tool returned a result the host could not render"
+        - "Other (describe below)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: host-error
+    attributes:
+      label: Host-side error output
+      description: |
+        Paste the host's surfacing of the error (status bar text, dev-console output, log file lines).
+        For Claude Desktop, check `~/Library/Logs/Claude/mcp-server-gripeventsctl.log` (macOS) or the equivalent on your OS.
+        For Claude Code, the MCP error appears in the chat surface.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: mcp-config
+    attributes:
+      label: MCP server config snippet
+      description: |
+        The host's config entry that launches GripEventsCtl (e.g. the `mcpServers.gripeventsctl` block). Paste the JSON/YAML verbatim, redacting any `env`-block credentials. Example:
+
+        ```json
+        {
+          "mcpServers": {
+            "gripeventsctl": {
+              "command": "npx",
+              "args": ["gripeventsctl", "mcp"]
+            }
+          }
+        }
+        ```
+      render: json
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15.1"
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: "Recent host updates, recent GripEventsCtl upgrades, working tool calls vs failing ones, etc."
+    validations:
+      required: false

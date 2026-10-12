@@ -1,0 +1,103 @@
+name: "Wire broke for me"
+description: "I ran a GripEventsCtl command and got an error or an unexpected response; the Grip wire format may have changed."
+title: "(wire-broke) <one-line summary of the failing command>"
+labels: ["wire-breakage", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this. GripEventsCtl is reverse-engineered from the Grip web app's wire format, and the
+        format can change without notice. Your report is the maintainer's primary signal that something has
+        shifted on Grip's side.
+
+        Before submitting, open Discussions at <https://github.com/alexey-pelykh/gripeventsctl/discussions> if
+        you only have a question, not a confirmed breakage.
+
+        ## Privacy
+
+        **Do not paste your `~/.gripeventsctl.yaml` contents, any value sent as `X-Authorization` (a 36-character
+        token), or the long chat token.** Redact them as `<REDACTED>`. GripEventsCtl's own debug output is
+        designed never to print token values, but transcripts from your shell may include them; scan before
+        pasting. Attendee data belongs to the people in the directory: redact names and ids you do not need
+        for the report.
+
+  - type: input
+    id: version
+    attributes:
+      label: GripEventsCtl version
+      description: "Output of `gripeventsctl --version`"
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Exact command that failed
+      description: "Paste the command verbatim. Redact event slugs, ids or names if you prefer."
+      placeholder: "gripeventsctl attendees list --type speaker --output json"
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error output (stderr + stdout)
+      description: |
+        Capture stderr and stdout:
+
+        ```sh
+        gripeventsctl <command> 2>&1 | tee gripeventsctl-error.log
+        ```
+
+        For MCP-server issues, use the `mcp-tool-issue` template instead.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth-status
+    attributes:
+      label: Does `gripeventsctl auth status` succeed?
+      description: "Run `gripeventsctl auth status` separately; this isolates session-token validity from command-specific wire breakage."
+      options:
+        - "Yes: `auth status` returns `valid`"
+        - "No: `auth status` returns `invalid` / `unauthenticated`"
+        - "No: `auth status` itself errors"
+        - "Did not run"
+    validations:
+      required: true
+
+  - type: input
+    id: surface
+    attributes:
+      label: Which endpoint or surface? (if known)
+      description: "The path under `https://api-prod.grip.events/1/` named in the error, or `unknown`."
+      placeholder: "unknown"
+    validations:
+      required: false
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      description: "Output of `node --version`. GripEventsCtl requires Node.js >= 22.19.0."
+      placeholder: "v22.19.0"
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: "e.g. `macOS 15.1`, `Ubuntu 24.04`, `Windows 11`."
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: "When did it last work? Any platform-side changes you noticed (app update, new login step, etc.)?"
+    validations:
+      required: false

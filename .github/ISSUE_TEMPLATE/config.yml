@@ -1,0 +1,17 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Discussions - questions, ideas, "is this expected?"
+    url: https://github.com/alexey-pelykh/gripeventsctl/discussions
+    about: |
+      For questions, usage help, ideas, or "did anyone else see this?" use Discussions instead of an issue.
+      Wire-breakage incidents and MCP-host failures should still use the dedicated issue templates above.
+  - name: Security vulnerability - coordinated disclosure
+    url: https://github.com/alexey-pelykh/gripeventsctl/security/policy
+    about: |
+      Do NOT open a public issue for security vulnerabilities. See SECURITY.md for the coordinated-disclosure
+      channel.
+  - name: Abuse report - misuse of GripEventsCtl
+    url: https://github.com/alexey-pelykh/gripeventsctl/blob/main/SECURITY.md#abuse-reporting
+    about: |
+      If you have observed GripEventsCtl being used to spam attendees, scrape a directory or otherwise abuse an
+      event platform, see SECURITY.md § Abuse reporting for the maintainer's contact channel.
