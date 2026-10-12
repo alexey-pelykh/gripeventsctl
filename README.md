@@ -125,8 +125,9 @@ Reads are free. Three actions change something on the platform and notify anothe
 These rules apply to all three:
 
 - They are off by default. You enable them in the config file.
-- Each target gets at most one action of each kind. The tool blocks repeats.
-- Every write is logged to an append-only file.
+- The repeat guard refuses a second action of the same kind against the same person.
+- Every write is logged to the append-only send log.
+- A message written by an assistant is never sent unless your go-ahead is recorded first.
 - Every write supports `--dry-run`, which shows what would be sent and sends nothing.
 
 The tool honours the platform's own rate limits.

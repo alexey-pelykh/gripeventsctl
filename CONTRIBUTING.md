@@ -73,7 +73,7 @@ The repository is a pnpm monorepo with the following packages:
 
 ### Conventions
 
-Follow the project conventions in [AGENTS.md](AGENTS.md).
+Follow the project conventions in [CLAUDE.md](CLAUDE.md).
 
 ### Submitting Changes
 
@@ -113,7 +113,7 @@ The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has four gates. An
 
 ### Releases
 
-A release is a GitHub Release whose tag is a semver version (`v0.1.0`, `v0.2.0-rc.1`). Publishing the release runs `.github/workflows/release.yml`: it validates on three operating systems, audits dependencies, stamps the tag's version into every package and `server.json`, publishes to npm with provenance through OpenID Connect trusted publishing, and attaches the SBOMs and tarballs to the release. Nothing is published from a maintainer's machine.
+A release is a GitHub Release whose tag is a semver version (`v0.1.0`, `v0.2.0-rc.1`). Publishing the release runs `.github/workflows/release.yml`: it validates on three operating systems, audits dependencies, stamps the tag's version into every publishable package and `server.json`, publishes to npm with provenance through OpenID Connect trusted publishing, and attaches the SBOMs and tarballs to the release. Nothing is published from a maintainer's machine.
 
 ### Partial closures
 

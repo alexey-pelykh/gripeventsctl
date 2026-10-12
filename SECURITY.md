@@ -35,7 +35,7 @@ These count as vulnerabilities:
 - A password passes through the MCP server or reaches an AI assistant.
 - A write reaches Grip while writes are off in the config file.
 - A write repeats to the same person despite the repeat guard.
-- A write reaches Grip without an entry in the append-only record.
+- A write reaches Grip without an entry in the append-only send log.
 - A message your assistant wrote is sent without your recorded go-ahead.
 - Attendee data lands on disk without you asking for an export.
 - The MCP server accepts a connection from anything other than its stdio parent.

@@ -152,7 +152,7 @@ They keep each action one you could take yourself in the app.
 - It writes only the three actions in section 1, each as yourself.
 - Writes are off by default. You turn them on in the config file.
 - Each write is guarded against a repeat to the same person.
-- Each write is logged in an append-only record.
+- Each write is logged in an append-only send log.
 - It never sends a message your assistant wrote unless your go-ahead is recorded first.
 - It honours Grip's own throttling of interest and chat writes, and does not evade it.
 
@@ -198,7 +198,7 @@ Pull requests that cross them will be declined, however clean the code:
 - **No bulk export.** No features for lead lists, resale, enrichment, or contact outside the platform.
 - **No acting for others.** No shared accounts, no second attendee, and no service that runs many accounts.
 - **No circumvention.** No way around Grip's throttling, scraping blocks, or other technical measures.
-- **No removal of the write guards.** Off by default, repeat guard, append-only record, and recorded go-ahead all stay.
+- **No removal of the write guards.** Off by default, repeat guard, append-only send log, and recorded go-ahead all stay.
 - **No AI training.** No feature that feeds platform data into training or tuning a model.
 - **No network listener.** The MCP server speaks stdio only.
 
