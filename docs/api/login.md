@@ -35,8 +35,25 @@ Which other headers the login call needs (`login-source`, `X-Grip-Version`, `ori
 
 ## Response
 
-The answer carries the session token that every later call sends as `X-Authorization`.
-The name and place of that field in the login response are not verified: the sources do not record the response body.
+**Verified live 2026-10-06**, from the login response the maintainer's sign-in script recorded that evening. The values are not kept here; the shape is.
+
+```json
+{
+  "success": true,
+  "data": {
+    "first_login": false,
+    "user_token": "<session token: a 36-character UUID>",
+    "chat_token": {
+      "IdentityId": "eu-west-1:<identity id>",
+      "Token": "<AWS Cognito token: a JWT about 1,000 characters long>",
+      "$metadata": { "httpStatusCode": 200, "requestId": "<id>", "attempts": 1, "totalRetryDelay": 0 }
+    }
+  }
+}
+```
+
+- `data.user_token` is the session token that every later call sends as `X-Authorization`.
+- `data.chat_token` is an AWS Cognito identity token for the chat service. The 2024 mobile login returned the same two fields. Nothing in this project uses the chat token yet. It is a secret and is redacted like the session token.
 
 ## Example
 

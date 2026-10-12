@@ -16,7 +16,6 @@ Run them only on the account owner's explicit go-ahead.
 ## Login and session
 
 - **Which headers the login call needs** besides `Authorization`, `Content-Type` and a browser `User-Agent` (`login-source`, `X-Grip-Version`, `origin`, `referer`). Verify by logging in with each header left out in turn. See [login.md](login.md).
-- **Where the login response carries the `user_token`.** The sources do not record the response body. Verify by logging in and recording the field name and nesting, with the token itself redacted.
 - **The token lifetime.** A token written at 21:09 on 2026-10-06 still worked at 22:35 that evening and at 07:39 on 2026-10-07, and all that morning. Verify by recording the last time a token works and the first time it fails.
 - **What the API answers to an expired or invalid `user_token`.** The existing clients treat 401 (and the dumper also 403) as an auth failure. Verify by sending a deliberately wrong token to a read-only call and recording the status and body.
 

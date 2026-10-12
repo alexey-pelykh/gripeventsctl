@@ -13,6 +13,8 @@ An unofficial CLI and MCP server for event apps hosted on [Grip](https://grip.ev
 
 **GripEventsCtl is NOT affiliated with, endorsed by, or supported by Grip.** It talks to a Grip-hosted event app with your own attendee session. It is for your own networking at an event you attend.
 
+"Grip" is the name of the event-networking platform run by Intros.at Ltd. This project uses the name only to say which platform your session belongs to.
+
 It is **NOT** for:
 
 - Spam or unsolicited outreach
