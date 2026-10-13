@@ -13,8 +13,12 @@ import { Writable } from "node:stream";
 import { type Interceptable, MockAgent } from "undici";
 import { afterAll, afterEach } from "vitest";
 
-/** The API origin, restated here because this package depends on no workspace package; `headers.test.ts` in core asserts it equals `API_ORIGIN`. */
-export const GRIP_API_ORIGIN = "https://api-prod.grip.events";
+/**
+ * The API origin, restated here because this package depends on no workspace package; `headers.test.ts` in core
+ * asserts it equals `API_ORIGIN`. Named for the mock so it is never read as `GRIP_API_ORIGIN`, one of the
+ * environment variables the client must ignore (AC-01).
+ */
+export const MOCK_API_ORIGIN = "https://api-prod.grip.events";
 
 /**
  * An undici `MockAgent` with `disableNetConnect()` (an accidental live request fails the test) and
@@ -36,7 +40,7 @@ export function mockGrip(): MockAgent {
 
 /** The interceptable pool of the API origin: `gripPool(agent).intercept({ path, method }).reply(...)`. */
 export function gripPool(agent: MockAgent): Interceptable {
-  return agent.get(GRIP_API_ORIGIN);
+  return agent.get(MOCK_API_ORIGIN);
 }
 
 class TextSink extends Writable {

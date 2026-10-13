@@ -17,7 +17,10 @@ export function throttled429(retryAfterSeconds?: number): GripReply {
 
 /** docs/api/interest.md § Response: HTTP 201 `action recorded - swipe message created or updated`; `connection` is 1 when the answer made a mutual connection. */
 export function matchAnswer201(connection: 0 | 1 = 0): GripReply {
-  return success200({ message: "action recorded - swipe message created or updated", connection }, 201);
+  return jsonReply(201, {
+    success: true,
+    data: { message: "action recorded - swipe message created or updated", connection },
+  });
 }
 
 export type MatchStatus = "has_match_none" | "has_match_yes" | "has_match_no" | "has_connection";
