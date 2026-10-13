@@ -71,12 +71,12 @@ export function safeCause(cause: unknown, depth = 0): Error {
  * classified.
  */
 export class GripError extends Error {
-  readonly kind: string;
+  readonly kind: GripErrorKind;
   readonly hint: string;
   readonly status?: number;
   readonly bodyExcerpt?: string;
 
-  constructor(kind: string, message: string, hint = "", options?: GripErrorOptions) {
+  constructor(kind: GripErrorKind, message: string, hint = "", options?: GripErrorOptions) {
     const errorOptions: ErrorOptions = {};
     if (options?.cause !== undefined) errorOptions.cause = safeCause(options.cause);
     super(redactString(message), errorOptions);
@@ -105,6 +105,8 @@ export class ConfigError extends GripError {
   }
 }
 
+export const AUTH_FAILED_HINT = "gripeventsctl auth signin <slug>";
+
 /**
  * The config holds no session: the user has not signed in, or has signed out. The auth commands
  * item maps this kind to exit code 3 in the CLI.
@@ -113,7 +115,7 @@ export class NoSessionError extends GripError {
   declare readonly kind: "no-session";
 
   constructor() {
-    super("no-session", "no session", "gripeventsctl auth signin <slug>");
+    super("no-session", "no session", AUTH_FAILED_HINT);
   }
 }
 
@@ -140,8 +142,6 @@ export class NetworkError extends GripError {
     super("network", message, NETWORK_HINT, options);
   }
 }
-
-export const AUTH_FAILED_HINT = "gripeventsctl auth signin <slug>";
 
 /**
  * HTTP 401 on an authenticated call: the session was rejected. The client records the first
@@ -189,7 +189,7 @@ export const GATED_TYPE_HINT =
  */
 export class GatedTypeError extends GripError {
   declare readonly kind: "gated-type";
-  /** The id the body names, where it names one. */
+  /** The id the body names (`thing N`), where it names one; whether N is a type id or a thing id is not recorded on the page. */
   readonly typeId: number | undefined;
 
   constructor(message: string, options: GripErrorOptions & { typeId?: number } = {}) {
@@ -200,8 +200,10 @@ export class GatedTypeError extends GripError {
   }
 }
 
-export const LOAD_BALANCER_REJECTED_HINT =
-  "the platform rejected the request before the API saw it; update the tool, or report it with the wire-breakage issue template";
+/** What to do when the platform refuses a request the tool built as documented: the wire shape has moved. */
+export const WIRE_BREAKAGE_HINT = "update the tool, or report it with the wire-breakage issue template";
+
+export const LOAD_BALANCER_REJECTED_HINT = `the platform rejected the request before the API saw it; ${WIRE_BREAKAGE_HINT}`;
 
 /**
  * HTTP 403 with a body that is not JSON: the load balancer's HTML page. Never retried with another
@@ -238,13 +240,17 @@ export class ModePhaseError extends GripError {
   }
 }
 
-/** HTTP 409 with a body holding an `error.data` array; the array is the hint, as the app shows it. Exit code 1. */
+/**
+ * HTTP 409 with a body holding an `error.data` array; the array is the hint, as the app shows it, cut
+ * to the excerpt length like every hint built from a body, while `details` keeps every item whole for
+ * the write items to read. Exit code 1.
+ */
 export class ConflictError extends GripError {
   declare readonly kind: "conflict";
   readonly details: readonly string[];
 
   constructor(message: string, details: readonly string[], options?: GripErrorOptions) {
-    super("conflict", message, details.join("; "), options);
+    super("conflict", message, bodyExcerpt(details.join("; ")), options);
     this.details = details.map((detail) => redactString(detail));
   }
 }

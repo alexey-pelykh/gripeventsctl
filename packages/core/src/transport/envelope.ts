@@ -18,7 +18,10 @@ export const SWIPE_CAP_REASON = "limit of swipes reached for action";
 export const MODE_PHASE_REASON = "action not allowed under current mode phase";
 // docs/api/containers.md § Answers.
 export const UNKNOWN_SLUG_REASON = "No results found for this container name";
-// docs/api/attendees.md § Types: a gated type answers 403 `thing N not authorized`.
+// docs/api/attendees.md § Types: a gated type answers 403 `thing N not authorized`. The match is the
+// issue's table ("data matching `not authorized`"), wider than that documented shape; whether to
+// narrow it to `thing N not authorized`, and whether the hint should advise probing one id per call
+// when the body names no id, are open points with the spec owner.
 const GATED_TYPE_PATTERN = /not authorized/i;
 const GATED_THING_ID_PATTERN = /\bthing\s+(\d+)\s+not authorized/i;
 
@@ -73,7 +76,10 @@ export function gatedThingId(reason: string): number | undefined {
 
 /**
  * The `error.data` array of an HTTP 409 (`docs/api/interest.md` § Errors the app matches on), each
- * item as text, or `undefined` where the body does not hold one.
+ * item as text, or `undefined` where the body does not hold one. The `error.data` location is read
+ * from the web app's code and was never seen on the wire (`docs/api/not-verified.md` § Match
+ * answers); if the live body carries the array at the top-level `data`, this returns `undefined`
+ * and the answer is the `api` kind. An open point with the spec owner.
  */
 export function conflictDetails(body: unknown): string[] | undefined {
   if (typeof body !== "object" || body === null) return undefined;
@@ -90,6 +96,12 @@ export function conflictDetails(body: unknown): string[] | undefined {
  * per-event token, and the type permissions kept as sent. `permissions` may be absent (an ended
  * edition). `default_container_id` names the application's default event, not the looked-up
  * container, and is not typed; which field holds the container's own id is not verified.
+ *
+ * The JSON types come from the page's own literals (`1` / `0` for `active`, "numeric id, for
+ * example `165`" for `application_id`, a display name that may be empty); the page's § Example
+ * prints a script's formatted output, not the raw answer, so the raw types are not recorded. A live
+ * answer of another type surfaces as `api` naming the field, the issue's rule for a mistyped
+ * documented field, and stops the sign-in at the lookup until the page records the raw types.
  */
 export const configLookupSchema = z.object({
   container: z.object({
@@ -117,11 +129,19 @@ export const loginAnswerSchema = z.object({
 
 export type LoginAnswer = z.infer<typeof loginAnswerSchema>;
 
+/**
+ * The one line a missing or mistyped documented field is reported with (the issue's rule: `api` naming
+ * the field); `detail` is the validator's own message, where there is one. An empty `field` names the
+ * answer as a whole.
+ */
+export function missingFieldMessage(field: string, detail?: string): string {
+  const subject = field === "" ? "the answer" : `the documented field ${field}`;
+  return `${subject} is missing or not of the documented type${detail === undefined ? "" : ` (${detail})`}`;
+}
+
 /** One line naming the first documented field the answer lacks or mistypes. */
 export function schemaFailureMessage(error: z.ZodError): string {
   const issue = error.issues[0];
   if (issue === undefined) return "the answer does not match the documented shape";
-  const path = issue.path.map(String).join(".");
-  const field = path === "" ? "the answer" : `the documented field ${path}`;
-  return `${field} is missing or not of the documented type (${issue.message})`;
+  return missingFieldMessage(issue.path.map(String).join("."), issue.message);
 }

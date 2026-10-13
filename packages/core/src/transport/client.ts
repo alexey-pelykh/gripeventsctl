@@ -11,13 +11,19 @@
  * - Every attempt carries `clock.timeoutSignal(30_000)` and reads at most 16 MiB of body.
  * - Every request passes through one process-wide FIFO queue: one request in flight per process,
  *   across all clients, operations and MCP tool calls. The queue also spaces two profile reads
- *   (`GET container/<id>/thing/<thing id or user_id>`) by at least 1,000 ms on the clock.
+ *   (`GET container/<id>/thing/<thing id or user_id>`) by at least 1,000 ms on the clock, measured
+ *   before every attempt, a retry after a 429 included.
  * - HTTP 429 is waited out on the backoff schedule (`backoff.ts`) inside the caller's awaited call,
- *   with the queue held, and the same request is retried unchanged. Nothing rotates.
- * - Every answer is classified once, in the order of the table in `#classify`, into exactly one
- *   error class of `errors.ts`.
- * - One diagnostic line per request on the injected `stderr`: method, path and status, on 429 the
- *   wait; never a header value or a body; every line through `redactString`.
+ *   with the queue held, and the same request is retried unchanged. Nothing rotates. Holding the
+ *   slot through the wait is a recorded decision, pending ratification: nothing is in flight during
+ *   the wait and neither oracle requires the hold, so releasing the slot during the sleep, and an
+ *   abort seam on the public methods, are open to the principal. In the MCP server one throttled
+ *   call therefore holds every other tool call for the whole schedule.
+ * - Every answer is classified once, in the order the doc comment of `#classify` lists, into
+ *   exactly one error class of `errors.ts`.
+ * - Diagnostic lines on the injected `stderr`: one per answer with method, path and status, plus
+ *   one per 429 wait naming the wait and the retry; never a header value or a body; every line
+ *   through `redactString`.
  *
  * The client uses the platform's plain HTTPS stack and sets no TLS option. It never signs in on
  * its own: `login()` runs only when the sign-in command calls it with the user's credentials.
@@ -41,6 +47,7 @@ import {
   gatedThingId,
   isGatedTypeReason,
   loginAnswerSchema,
+  missingFieldMessage,
   parseEnvelope,
   parseJson,
   schemaFailureMessage,
@@ -56,6 +63,8 @@ import {
   SwipeCapError,
   ThrottledError,
   UnknownSlugError,
+  WIRE_BREAKAGE_HINT,
+  bodyExcerpt,
 } from "./errors.js";
 import { BASE_URL, type HeaderSet, authenticatedHeaders, loginHeaders, lookupHeaders } from "./headers.js";
 
@@ -206,6 +215,26 @@ function registerConfigSecrets(data: unknown): void {
   if (typeof token === "string") registerSecret(token);
 }
 
+/**
+ * What a failed fetch says: its own message, then the first cause's `code` and message where there is
+ * one. undici wraps every transport failure as `TypeError("fetch failed", { cause })` (undici 8.11.2,
+ * `lib/web/fetch/index.js`), so the discriminating detail (`ENOTFOUND`, `ECONNRESET`, a certificate
+ * error) lives only in the cause. The caller passes the line through `redactString`.
+ */
+function failureDetail(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause: unknown = error.cause;
+  if (!(cause instanceof Error)) return error.message;
+  const code: unknown = (cause as { code?: unknown }).code;
+  const named = typeof code === "string" || typeof code === "number" ? `${String(code)}: ` : "";
+  return `${error.message} (${named}${cause.message})`;
+}
+
+/** Reads a client's private fields; the class's static block sets it, because only the class body can reach them. */
+let readPrivateState: (client: GripClient) => Readonly<Record<string, unknown>> = () => {
+  throw new Error("GripClient is not initialised");
+};
+
 export class GripClient {
   readonly #dispatcher: Dispatcher | undefined;
   readonly #clock: Clock;
@@ -213,6 +242,21 @@ export class GripClient {
   readonly #stderr: NodeJS.WritableStream;
   /** The session token, resolved once per client on the first authenticated call; in memory only. */
   #token: string | undefined;
+
+  static {
+    readPrivateState = (client) => GripClient.#privateState(client);
+  }
+
+  /** The private fields by name, for the test that checks the client keeps no credential (AC-04); see `privateStateForTest`. */
+  static #privateState(client: GripClient): Readonly<Record<string, unknown>> {
+    return Object.freeze({
+      dispatcher: client.#dispatcher,
+      clock: client.#clock,
+      env: client.#env,
+      stderr: client.#stderr,
+      token: client.#token,
+    });
+  }
 
   constructor(options: GripClientOptions = {}) {
     this.#dispatcher = options.dispatcher;
@@ -244,7 +288,9 @@ export class GripClient {
    * `POST user/account/login` with `Authorization: Bearer <application token>, Basic
    * <base64(email:password)>` and the body `{"container_id": <n>}` (`docs/api/login.md` § Request).
    * `data.user_token` is the session token; `data.chat_token` is registered as a secret and
-   * discarded. The `Basic` value lives in this call's locals and nowhere else.
+   * discarded. The `Basic` value is built by `loginHeaders()` for this one request and registered
+   * in the process-lifetime live-secret registry (`redact.ts`), so `redactString` replaces it
+   * wherever it appears; no field of this client holds it.
    */
   async login(input: LoginInput): Promise<LoginResult> {
     registerSecret(input.applicationToken);
@@ -319,8 +365,10 @@ export class GripClient {
     const escapes = path.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.split(/[/?#]/).includes("..");
     const url = escapes ? undefined : new URL(path, BASE_URL);
     if (url === undefined || !url.href.startsWith(BASE_URL)) {
+      // The quoted path passes through redactString like every other line the client builds: a caller may have
+      // put a token in it.
       throw new TypeError(
-        `GripClient: a path is relative to ${BASE_URL} and must not start with "/" or leave it: ${JSON.stringify(path)}`,
+        `GripClient: a path is relative to ${BASE_URL} and must not start with "/" or leave it: ${redactString(JSON.stringify(path))}`,
       );
     }
     if (query !== undefined) {
@@ -331,6 +379,12 @@ export class GripClient {
     return url;
   }
 
+  /**
+   * `data` typed by `schema`, or returned as given when no schema is passed: the type argument `T`
+   * is then the caller's assertion and nothing checks it. The issue's signatures make the schema
+   * optional while `T` stays free; whether the typed return should be reachable only through a
+   * schema is an open point with the spec owner.
+   */
   #validate<T>(data: unknown, schema: ZodType<T> | undefined, spec: RequestSpec, status: number): T {
     if (schema === undefined) return data as T;
     const result = schema.safeParse(data);
@@ -343,7 +397,13 @@ export class GripClient {
     this.#stderr.write(`${redactString(line)}\n`);
   }
 
-  /** Resolve the session token once per client, from the config file the environment names; never written anywhere. */
+  /**
+   * Resolve the session token once per client, from the config file the environment names; never
+   * written anywhere. A 401 records the failure but does not clear the cached token, so a long-lived
+   * client keeps sending it until it is replaced; whether a 401 should drop the cache so the next
+   * call re-reads the config file, or the MCP server should build one client per tool call, is an
+   * open point with the spec owner.
+   */
   async #sessionToken(): Promise<string> {
     if (this.#token === undefined) {
       const { config } = await loadConfig({ env: this.#env });
@@ -352,23 +412,28 @@ export class GripClient {
     return this.#token;
   }
 
-  /** Take the queue slot in call order; resolve the token, space a profile read and exchange inside it. */
+  /** Take the queue slot in call order; resolve the token and exchange inside it. */
   #send(spec: RequestSpec): Promise<Classified> {
     return enqueue(async () => {
       const headers =
         spec.context === "authenticated"
           ? authenticatedHeaders(await this.#sessionToken(), { body: spec.body !== undefined })
           : (spec.headers ?? {});
-      await this.#spaceProfileRead(spec);
       return this.#exchange(spec, headers);
     });
   }
 
+  /**
+   * At least `PROFILE_SPACING_MS` on the clock since the last profile read was sent, before every attempt of a
+   * profile read, a retry after a 429 included, so the next profile read is measured from the retry's send time.
+   * The wait is never longer than one interval, whatever the clock did: a system clock stepped backwards would
+   * otherwise hold the queue for the whole step. A first profile read never waits.
+   */
   async #spaceProfileRead(spec: RequestSpec): Promise<void> {
     if (!isProfilePath(spec.method, spec.path)) return;
     const last = lastProfileReadAt.get(this.#clock);
     if (last !== undefined) {
-      const wait = last + PROFILE_SPACING_MS - this.#clock.now().getTime();
+      const wait = Math.min(last + PROFILE_SPACING_MS - this.#clock.now().getTime(), PROFILE_SPACING_MS);
       if (wait > 0) await this.#clock.sleep(wait);
     }
     lastProfileReadAt.set(this.#clock, this.#clock.now().getTime());
@@ -378,12 +443,14 @@ export class GripClient {
   async #exchange(spec: RequestSpec, headers: HeaderSet): Promise<Classified> {
     const line = describe(spec);
     for (let retries = 0; ; retries += 1) {
+      await this.#spaceProfileRead(spec);
       const answer = await this.#attempt(spec, headers);
       if (answer.status !== 429) {
         this.#log(`${line}: ${String(answer.status)}`);
         return this.#classify(spec, answer);
       }
-      const waitS = backoffWaitS(retries + 1, answer.headers.get("retry-after"));
+      // A `Retry-After` in HTTP-date form is measured on the client's clock.
+      const waitS = backoffWaitS(retries + 1, answer.headers.get("retry-after"), this.#clock.now());
       if (waitS === undefined) {
         this.#log(`${line}: 429; the backoff schedule has ended after ${String(MAX_RETRIES)} retries`);
         throw new ThrottledError(`${line}: HTTP 429 after ${String(MAX_RETRIES)} retries; the platform is throttling`, {
@@ -409,6 +476,11 @@ export class GripClient {
         headers,
         ...(spec.body === undefined ? {} : { body: spec.body }),
         dispatcher: this.#dispatcher ?? getGlobalDispatcher(),
+        // "manual", not the issue's `redirect: "error"`: in "error" mode fetch rejects a 3xx with a
+        // TypeError that carries no status, while AC-13 requires the `api` error to name the status.
+        // "manual" hands the 3xx answer back unfollowed and `#classify` refuses it with its status;
+        // nothing is sent to the `Location` target either way. The departure from the issue's text
+        // is recorded for the spec owner.
         redirect: "manual",
         signal,
       });
@@ -438,17 +510,28 @@ export class GripClient {
         chunks.push(value);
       }
     } catch (error: unknown) {
-      throw this.#networkError(line, error, signal);
+      throw this.#networkError(line, error, signal, "body");
     }
     return Buffer.concat(chunks).toString("utf8");
   }
 
-  #networkError(line: string, error: unknown, signal: AbortSignal): NetworkError {
+  /** The `network` error for a failed attempt; the timeout covers the request and the body read, and the message says which stage it hit. */
+  #networkError(
+    line: string,
+    error: unknown,
+    signal: AbortSignal,
+    stage: "request" | "body" = "request",
+  ): NetworkError {
     if (signal.aborted) {
-      this.#log(`${line}: no answer within ${String(REQUEST_TIMEOUT_MS / 1000)} s`);
-      return new NetworkError(`${line}: no answer within ${String(REQUEST_TIMEOUT_MS / 1000)} s`, { cause: error });
+      const seconds = String(REQUEST_TIMEOUT_MS / 1000);
+      const message =
+        stage === "body"
+          ? `${line}: the answer's body did not arrive whole within ${seconds} s of the request`
+          : `${line}: no answer within ${seconds} s`;
+      this.#log(message);
+      return new NetworkError(message, { cause: error });
     }
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = failureDetail(error);
     this.#log(`${line}: the request failed: ${detail}`);
     return new NetworkError(`${line}: the request failed: ${detail}`, { cause: error });
   }
@@ -468,7 +551,11 @@ export class GripClient {
     const http = `HTTP ${String(status)}`;
 
     if (text === undefined) {
-      throw new ApiError(`${line}: the answer exceeded 16 MiB and was not read (${http})`, http, { status });
+      throw new ApiError(
+        `${line}: the answer exceeded ${String(BODY_CAP_BYTES / (1024 * 1024))} MiB and was not read (${http})`,
+        http,
+        { status },
+      );
     }
     if (status >= 300 && status < 400) {
       // Never followed, and the `Location` value never reaches a message.
@@ -492,10 +579,13 @@ export class GripClient {
         );
       }
       const data = envelope?.data;
+      // `thing N not authorized` (`docs/api/attendees.md` § Gated for a normal attendee token): the
+      // page does not say what N identifies. It is carried as `typeId` on the issue's reading ("the
+      // hint names the type id where the body names it"); an open point with the spec owner.
       if (spec.context === "authenticated" && isDirectorySearchPath(spec.path) && isGatedTypeReason(data)) {
         const named = gatedThingId(data);
         throw new GatedTypeError(
-          `${line}: ${http} ${JSON.stringify(data)}: the type set includes a type this session cannot list`,
+          `${line}: ${http} ${JSON.stringify(bodyExcerpt(data))}: the type set includes a type this session cannot list`,
           {
             status,
             bodyExcerpt: data,
@@ -505,9 +595,13 @@ export class GripClient {
       }
     }
 
+    // Every 401 is `auth-failed`, and a JSON 403 outside the directory search stays `api`, on the
+    // issue's table. What the platform answers to an expired or invalid session token is not
+    // verified (`docs/api/not-verified.md` § Login and session: the earlier clients treated 401,
+    // and the dumper also 403, as an authentication failure).
     if (status === 401) {
       if (spec.context === "authenticated") await this.#recordAuthFailure();
-      const detail = reason ?? "";
+      const detail = reason === undefined ? "" : bodyExcerpt(reason);
       const message = `${line}: ${http}${detail === "" ? "" : `: ${detail}`}`;
       if (spec.context === "login") {
         throw new AuthFailedError(`${message}; the login was refused`, {
@@ -520,7 +614,7 @@ export class GripClient {
         throw new AuthFailedError(`${message}; the public bootstrap bearer was refused`, {
           status,
           bodyExcerpt: detail,
-          hint: "update the tool, or report it with the wire-breakage issue template",
+          hint: WIRE_BREAKAGE_HINT,
         });
       }
       throw new AuthFailedError(`${message}; the session was rejected`, { status, bodyExcerpt: detail });
@@ -536,18 +630,22 @@ export class GripClient {
     }
 
     if (status === 403) {
-      // Any other JSON 403 is the `api` kind: not an authentication failure.
-      const detail = reason ?? text;
-      throw new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: detail });
+      // Any other JSON 403 is the `api` kind, not an authentication failure, on the issue's table;
+      // the not-verified note above the 401 row names the expired-token answer this rests on. A 403
+      // whose JSON is not a `success: false` envelope is reported like every other unexpected
+      // answer below: the status as the hint, the body only as the excerpt.
+      if (reason === undefined) {
+        throw new ApiError(`${line}: unexpected answer (${http})`, http, { status, bodyExcerpt: text });
+      }
+      const detail = bodyExcerpt(reason);
+      throw new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: reason });
     }
 
     if (status === 409) {
       const details = conflictDetails(json);
       if (details !== undefined) {
-        throw new ConflictError(`${line}: ${http}: ${details.join("; ")}`, details, {
-          status,
-          bodyExcerpt: details.join("; "),
-        });
+        const joined = details.join("; ");
+        throw new ConflictError(`${line}: ${http}: ${bodyExcerpt(joined)}`, details, { status, bodyExcerpt: joined });
       }
     }
 
@@ -559,11 +657,21 @@ export class GripClient {
     }
 
     if (envelope !== undefined && envelope.success && status >= 200 && status < 300) {
+      // JSON cannot carry `undefined`, so `data` being undefined means the key is absent: a missing
+      // documented field, never a result (the envelope always has `data`, and AC-06 forbids returning
+      // `undefined` for it).
+      if (envelope.data === undefined) {
+        const detail = missingFieldMessage("data");
+        throw new ApiError(`${line}: ${detail}`, detail, { status });
+      }
       return { status, data: envelope.data };
     }
 
+    // Every message tail and hint built from a body or a reason is the redacted 200-character excerpt,
+    // the same `bodyExcerpt` carries; a 16 MiB `data` never lands in a message.
     if (reason !== undefined) {
-      throw new ApiError(`${line}: ${http}: ${reason}`, reason, { status, bodyExcerpt: reason });
+      const detail = bodyExcerpt(reason);
+      throw new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: reason });
     }
     throw new ApiError(`${line}: unexpected answer (${http})`, http, { status, bodyExcerpt: text });
   }
@@ -580,7 +688,21 @@ export class GripClient {
   }
 }
 
-/** The method and the path as given: what the diagnostic line and every message name. Never a header value or a body. */
+/**
+ * The method and the path as given: what the diagnostic line and every message name. The path is the
+ * caller's string, ids included; whether the issue's "path template" means ids replaced by
+ * placeholders is an open point with the spec owner. Never a header value or a body.
+ */
 function describe(spec: RequestSpec): string {
   return `${spec.method} ${spec.path}`;
+}
+
+/**
+ * Test seam: a client's `#private` fields by name, which no reflection (`JSON.stringify`,
+ * `Object.getOwnPropertyNames`, `util.inspect` with `showHidden`) can list. The AC-04 case asserts that
+ * none of them holds the `Basic` value or the password after a login, and that the set of fields is
+ * exactly the one the class declares. Exported from this module only, never from the package entry.
+ */
+export function privateStateForTest(client: GripClient): Readonly<Record<string, unknown>> {
+  return readPrivateState(client);
 }

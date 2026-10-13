@@ -8,6 +8,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
@@ -26,6 +27,7 @@ import {
   fixtureSecrets,
   gatedType403,
   gripPool,
+  jsonReply,
   loadBalancer403,
   login200,
   matchAnswer201,
@@ -38,14 +40,16 @@ import {
   success200,
   failure,
   swipeCapAnswer,
+  throttled429,
   withTempHome,
 } from "@gripeventsctl/testing";
 import { Dispatcher, type MockAgent } from "undici";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { loadConfig, saveConfig } from "../config/store.js";
+import { loadConfig, recordAuthFailure, saveConfig } from "../config/store.js";
 import { REDACTED, redactString, registerSecret } from "../lib/redact.js";
+import { SCHEDULE_S } from "../transport/backoff.js";
 import {
   BODY_CAP_BYTES,
   GripClient,
@@ -53,14 +57,16 @@ import {
   REQUEST_TIMEOUT_MS,
   isDirectorySearchPath,
   isProfilePath,
+  privateStateForTest,
 } from "../transport/client.js";
 import {
   ApiError,
   AuthFailedError,
+  BODY_EXCERPT_LENGTH,
   ConfigError,
   ConflictError,
   GatedTypeError,
-  type GripError,
+  GripError,
   LoadBalancerRejectedError,
   ModePhaseError,
   NetworkError,
@@ -69,12 +75,25 @@ import {
   ThrottledError,
   UnknownSlugError,
   UsageError,
+  WIRE_BREAKAGE_HINT,
   WriteRefusedError,
 } from "../transport/errors.js";
 import { API_ORIGIN, BASE_URL, BOOTSTRAP_BEARER, USER_AGENT, WEB_APP_ORIGIN } from "../transport/headers.js";
 
+// The store is the real one; `recordAuthFailure` is wrapped so the number of calls per 401 is observable (AC-08
+// says "called once"), which the stored value alone cannot show: the store writes only the first failure.
+vi.mock("../config/store.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../config/store.js")>();
+  return { ...original, recordAuthFailure: vi.fn(original.recordAuthFailure) };
+});
+const recordAuthFailureMock = vi.mocked(recordAuthFailure);
+
 const CLIENT_SOURCE = fileURLToPath(new URL("../transport/client.ts", import.meta.url));
 const HEADERS_SOURCE = fileURLToPath(new URL("../transport/headers.ts", import.meta.url));
+const ENVELOPE_SOURCE = fileURLToPath(new URL("../transport/envelope.ts", import.meta.url));
+const BACKOFF_SOURCE = fileURLToPath(new URL("../transport/backoff.ts", import.meta.url));
+/** The whole backoff schedule in milliseconds: advancing a fake clock by this much fires every wait a request can hold. */
+const WHOLE_SCHEDULE_MS = SCHEDULE_S.reduce((sum, step) => sum + step, 0) * 1000 + REQUEST_TIMEOUT_MS;
 
 type CallLog = ReturnType<NonNullable<ReturnType<MockAgent["getCallHistory"]>>["calls"]>[number];
 
@@ -179,6 +198,25 @@ function recordingClock(): FakeClock & { sleeps: number[] } {
   };
 }
 
+/**
+ * Release the process-wide queue on every outcome of a case: advance the manual clock until every given request
+ * has settled, firing the waits it registers one after another (a backoff sleep, then the next attempt's timeout
+ * or spacing sleep). A case that holds the queue and fails before releasing it would otherwise strand every later
+ * case behind a queue tail that never settles.
+ */
+async function drain(clock: FakeClock, ...pending: Promise<unknown>[]): Promise<void> {
+  let settled = false;
+  const all = Promise.allSettled(pending).then(() => {
+    settled = true;
+  });
+  for (let round = 0; round < 12 && !settled; round += 1) {
+    await clock.advance(WHOLE_SCHEDULE_MS);
+    await settle();
+  }
+  if (!settled) throw new Error("the queue could not be drained: a request still waits on the clock after 12 rounds");
+  await all;
+}
+
 const CONFIG_ANSWER = { slug: "test-event-1", displayName: "Test Event 1" };
 
 beforeEach(() => {
@@ -227,22 +265,78 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
     });
   });
 
-  it("refuses a path that would leave the base URL before any request is sent", async () => {
-    await withSession(async (home) => {
+  it("keeps the origin when the override variables sit on process.env itself and the client reads the process environment", async () => {
+    await withSession(async (_home, secrets) => {
+      const names = [
+        "GRIP_API_ORIGIN",
+        "GRIPEVENTSCTL_API_URL",
+        "GRIP_API_URL",
+        "GRIP_BASE_URL",
+        "GRIPEVENTSCTL_API_ORIGIN",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+      ];
+      const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+      try {
+        for (const name of names) {
+          process.env[name] = name.endsWith("ORIGIN") ? "https://second.example" : "https://second.example/1/";
+        }
+        pool()
+          .intercept({ path: "/1/container", method: "GET" })
+          .reply(() => containerList200());
+        pool()
+          .intercept({ path: "/1/config?container_name=test-event-1", method: "GET" })
+          .reply(() => configLookup200({ ...CONFIG_ANSWER, applicationToken: secrets.applicationToken }));
+        // No `env` option: the client reads process.env, where the temporary home's config file holds the session.
+        const client = new GripClient({ dispatcher: agent, clock: fakeClock(), stderr: stderrSink().stream });
+
+        await client.get("container");
+        await client.lookupConfig("test-event-1");
+
+        expect(calls()).toHaveLength(2);
+        for (const call of calls()) {
+          expect(call.origin).toBe(API_ORIGIN);
+          expect(call.fullUrl.startsWith(BASE_URL)).toBe(true);
+        }
+        expect(lowerHeaders(calls()[0]?.headers)["x-authorization"]).toBe(secrets.sessionToken);
+      } finally {
+        for (const name of names) {
+          const value = saved[name];
+          if (value === undefined) Reflect.deleteProperty(process.env, name);
+          else process.env[name] = value;
+        }
+      }
+    });
+  });
+
+  it("refuses a path that would leave the base URL before any request is sent, and redacts the path it quotes", async () => {
+    await withSession(async (home, secrets) => {
       const client = newClient(home.env);
       for (const path of ["/container", "../container", "https://second.example/1/container", "//second.example/x"]) {
         const error = await caught(client.get(path));
         expect(error, path).toBeInstanceOf(TypeError);
       }
+      // The refusal quotes the path, so the quote passes through redactString like every other line the client
+      // builds: a registered live value (the session token, which the config store registers when it resolves it)
+      // and a shape the patterns know (`user_token=<uuid>`) are both replaced.
+      registerSecret(secrets.sessionToken);
+      for (const path of [`/container?x=${secrets.sessionToken}`, `/container?user_token=${secrets.sessionToken}`]) {
+        const error = await caught(client.get(path));
+        expect(error, path).toBeInstanceOf(TypeError);
+        expect((error as Error).message, path).not.toContain(secrets.sessionToken);
+        expect((error as Error).message, path).toContain(REDACTED);
+      }
       expect(calls()).toHaveLength(0);
     });
   });
 
-  it("sets no TLS option: the client source names neither rejectUnauthorized nor a TLS module", async () => {
-    for (const file of [CLIENT_SOURCE, HEADERS_SOURCE]) {
+  it("sets no TLS option and reads no origin from the process environment, in dot, bracket or destructured form", async () => {
+    for (const file of [CLIENT_SOURCE, HEADERS_SOURCE, ENVELOPE_SOURCE, BACKOFF_SOURCE]) {
       const source = await readFile(file, "utf8");
-      expect(source).not.toMatch(/rejectUnauthorized|node:tls|["']tls["']|node:https|ciphers|ja3|impersonat/i);
-      expect(source).not.toMatch(/process\.env\.[A-Z_]*(ORIGIN|URL|HOST)/);
+      expect(source, file).not.toMatch(/rejectUnauthorized|node:tls|["']tls["']|node:https|ciphers|ja3|impersonat/i);
+      // `process.env.X`, `process.env["X"]` and `const { X } = process.env` are the ways a source reads a variable;
+      // the client's `options.env ?? process.env` default is none of them.
+      expect(source, file).not.toMatch(/process\.env\.[A-Z_]*(ORIGIN|URL|HOST)|process\.env\[|=\s*process\.env\b/);
     }
   });
 });
@@ -457,7 +551,9 @@ describe("[CAP-CLIENT] AC-04 the login call (docs/api/login.md § Request, § Re
       expect(redactString(`"Token": "${secrets.chatToken}"`)).toBe(`"Token": "${REDACTED}"`);
       expect(redactString(`v=${secrets.chatToken}`)).toBe(`v=${REDACTED}`);
 
-      // The Basic value and the password: in no stream, no error and no object the client keeps.
+      // The Basic value and the password: in no stream, no error and no object the client keeps. The four
+      // reflective sinks cannot list a `#private` field (`util.inspect` with `showHidden` prints `C { pub: 2 }` for a
+      // class holding one), so they guard the public shape only; the private state is read through the test seam.
       const sinks: Record<string, string> = {
         stderr: stderr.text(),
         json: JSON.stringify(client),
@@ -472,6 +568,29 @@ describe("[CAP-CLIENT] AC-04 the login call (docs/api/login.md § Request, § Re
       expect(Object.getOwnPropertyNames(client)).toEqual([]);
       expect(Object.getOwnPropertySymbols(client)).toEqual([]);
       expect(JSON.stringify(client)).toBe("{}");
+
+      // The private fields, by name: exactly the five the class declares, so a new field cannot arrive unasserted,
+      // and none holds the Basic value or the password. The injected dispatcher is the test's own mock, whose call
+      // history recorded the login request; that record is cleared first, because it is the harness's, not a value
+      // the client keeps.
+      agent.clearCallHistory();
+      const state = privateStateForTest(client);
+      expect(Object.keys(state).sort()).toEqual(["clock", "dispatcher", "env", "stderr", "token"]);
+      expect(state["token"]).toBeUndefined();
+      const serialise = (value: unknown): string => {
+        let json: string;
+        try {
+          json = JSON.stringify(value) ?? "undefined";
+        } catch (error: unknown) {
+          json = `[not serialisable: ${error instanceof Error ? error.message : String(error)}]`;
+        }
+        return `${json}\n${inspect(value, { showHidden: true, depth: 10 })}`;
+      };
+      for (const [field, value] of Object.entries(state)) {
+        const text = serialise(value);
+        expect(text, `the private field ${field} holds the Basic value`).not.toContain(secrets.basic);
+        expect(text, `the private field ${field} holds the password`).not.toContain(secrets.password);
+      }
     });
   });
 
@@ -643,6 +762,96 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
       expect((typed as GripError).message).toContain("id");
     });
   });
+
+  it("raises api naming the documented field data when a success answer carries no data key, on get, post and pages alike", async () => {
+    // JSON cannot carry `undefined`, so an absent `data` is the only way a success answer arrives without one; the
+    // documented envelope always has it (docs/api/README.md § Response envelope), and AC-06 forbids returning
+    // `undefined` for it.
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      const missing = "the documented field data is missing or not of the documented type";
+
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => jsonReply(200, { success: true }));
+      const got = await caught(client.get("container"));
+      expect(got).toBeInstanceOf(ApiError);
+      expect((got as GripError).kind).toBe("api");
+      expect((got as GripError).status).toBe(200);
+      expect((got as GripError).message).toBe(`GET container: ${missing}`);
+      expect((got as GripError).hint).toBe(missing);
+      expect(calls()).toHaveLength(1);
+
+      pool()
+        .intercept({ path: "/1/container/1/thing/user_id/match_manual/yes/to_thing/2", method: "POST" })
+        .reply(() => jsonReply(201, { success: true }));
+      const posted = await caught(client.post("container/1/thing/user_id/match_manual/yes/to_thing/2", {}));
+      expect(posted).toBeInstanceOf(ApiError);
+      expect((posted as GripError).message).toContain(missing);
+      expect((posted as GripError).status).toBe(201);
+
+      pool()
+        .intercept({ path: (path) => path.startsWith("/1/container/1/search/?"), method: "GET" })
+        .reply(() => jsonReply(200, { success: true }));
+      const paged = await caught(
+        (async () => {
+          for await (const entry of client.pages("container/1/search/", { sort: "name" })) void entry;
+        })(),
+      );
+      expect(paged).toBeInstanceOf(ApiError);
+      expect((paged as GripError).message).toContain(missing);
+      expect(calls()).toHaveLength(3);
+    });
+  });
+
+  it("cuts the message tail and the hint of an api error to the excerpt length, and carries a non-envelope 403 body only in bodyExcerpt", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      const long = "r".repeat(5_000);
+
+      // A `success: false` whose reason is long: message tail, hint and bodyExcerpt are all the 200-character excerpt.
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => failure(long, 400));
+      const reasoned = await caught(client.get("container"));
+      expect(reasoned).toBeInstanceOf(ApiError);
+      const reasonedError = reasoned as GripError;
+      expect(reasonedError.bodyExcerpt).toHaveLength(BODY_EXCERPT_LENGTH);
+      expect(reasonedError.hint).toBe(long.slice(0, BODY_EXCERPT_LENGTH));
+      expect(reasonedError.message).toBe(`GET container: HTTP 400: ${long.slice(0, BODY_EXCERPT_LENGTH)}`);
+
+      // A 403 whose JSON is not a `success: false` envelope: the status is the hint and the body sits only in bodyExcerpt.
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => jsonReply(403, { unexpected: long }));
+      const forbidden = await caught(client.get("container"));
+      expect(forbidden).toBeInstanceOf(ApiError);
+      const forbiddenError = forbidden as GripError;
+      expect(forbiddenError.kind).toBe("api");
+      expect(forbiddenError.status).toBe(403);
+      expect(forbiddenError.hint).toBe("HTTP 403");
+      expect(forbiddenError.message).toBe("GET container: unexpected answer (HTTP 403)");
+      expect(forbiddenError.message).not.toContain("rrrr");
+      expect(forbiddenError.bodyExcerpt).toBe(JSON.stringify({ unexpected: long }).slice(0, BODY_EXCERPT_LENGTH));
+
+      // A 409 whose error.data items are long: the array stays whole on `details`, message tail and hint are cut.
+      const details = ["x".repeat(300), "y".repeat(300)];
+      const relative = "container/1/thing/user_id/match_manual/yes/to_thing/2";
+      pool()
+        .intercept({ path: `/1/${relative}`, method: "POST" })
+        .reply(() => conflict409(details));
+      const conflict = await caught(client.post(relative, { message: "" }));
+      expect(conflict).toBeInstanceOf(ConflictError);
+      const conflictError = conflict as ConflictError;
+      expect(conflictError.details).toEqual(details);
+      expect(conflictError.hint).toBe(details.join("; ").slice(0, BODY_EXCERPT_LENGTH));
+      expect(conflictError.message).toBe(
+        `POST ${relative}: HTTP 409: ${details.join("; ").slice(0, BODY_EXCERPT_LENGTH)}`,
+      );
+      expect(conflictError.bodyExcerpt).toHaveLength(BODY_EXCERPT_LENGTH);
+      expect(calls()).toHaveLength(3);
+    });
+  });
 });
 
 describe("[CAP-CLIENT] AC-07 the three 403 answers", () => {
@@ -701,9 +910,10 @@ describe("[CAP-CLIENT] AC-07 the three 403 answers", () => {
 });
 
 describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
-  it("raises auth-failed with the sign-in hint, records the first failure at the clock's time, sends once, never signs in", async () => {
+  it("raises auth-failed with the sign-in hint, records the first failure at the clock's time exactly once, sends once, never signs in", async () => {
     await withSession(async (home) => {
       const clock = fakeClock("2026-10-13T08:12:00Z");
+      const recordsBefore = recordAuthFailureMock.mock.calls.length;
       pool()
         .intercept({ path: "/1/container", method: "GET" })
         .reply(() => failure("synthetic unauthorized 1", 401));
@@ -714,10 +924,14 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
       expect(gripError.status).toBe(401);
       expect(gripError.hint).toBe("gripeventsctl auth signin <slug>");
       expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
+      // Exactly one record per 401, against the client's own environment and clock.
+      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(1);
+      expect(recordAuthFailureMock.mock.lastCall?.[0]).toMatchObject({ env: home.env, clock });
       expect(calls()).toHaveLength(1);
       expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
 
-      // A later 401 leaves the first record alone, and an HTML 401 is still an authentication failure.
+      // A later 401 leaves the first record alone (the store writes nothing for it, the client still records it once),
+      // and an HTML 401 is still an authentication failure.
       pool()
         .intercept({ path: "/1/container", method: "GET" })
         .reply(() => ({
@@ -729,7 +943,74 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
       const again = await caught(newClient(home.env, { clock }).get("container"));
       expect(again).toBeInstanceOf(AuthFailedError);
       expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
+      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(2);
       expect(calls()).toHaveLength(2);
+    });
+  });
+
+  it("a 401 on the config lookup is auth-failed with the wire-breakage hint: the bootstrap bearer was refused, nothing is recorded, no login", async () => {
+    // With a session in the config file, so a failure wrongly recorded against it would show.
+    await withSession(async (home) => {
+      const recordsBefore = recordAuthFailureMock.mock.calls.length;
+      pool()
+        .intercept({ path: "/1/config?container_name=test-event-1", method: "GET" })
+        .reply(() => failure("synthetic unauthorized 1", 401));
+      const error = await caught(newClient(home.env).lookupConfig("test-event-1"));
+      expect(error).toBeInstanceOf(AuthFailedError);
+      const gripError = error as GripError;
+      expect(gripError.kind).toBe("auth-failed");
+      expect(gripError.status).toBe(401);
+      expect(gripError.hint).toBe(WIRE_BREAKAGE_HINT);
+      expect(gripError.hint).toBe("update the tool, or report it with the wire-breakage issue template");
+      expect(gripError.message).toContain("the public bootstrap bearer was refused");
+      expect(calls()).toHaveLength(1);
+      expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
+      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(0);
+      expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBeUndefined();
+    });
+    // Without a session: no file is written either.
+    await withTempHome(async (home) => {
+      pool()
+        .intercept({ path: "/1/config?container_name=test-event-1", method: "GET" })
+        .reply(() => failure("synthetic unauthorized 1", 401));
+      expect(await caught(newClient(home.env).lookupConfig("test-event-1"))).toBeInstanceOf(AuthFailedError);
+      expect((await loadConfig({ env: home.env })).exists).toBe(false);
+    });
+  });
+});
+
+describe("[CAP-THROTTLE] AC-09 a Retry-After in HTTP-date form (RFC 9110 § 10.2.3)", () => {
+  it("waits until the date, measured on the clock, before the retry; a far date is capped at 300 s", async () => {
+    await withSession(async (home) => {
+      const clock = recordingClock();
+      const soon = throttled429();
+      soon.responseOptions.headers["retry-after"] = new Date(clock.now().getTime() + 7_000).toUTCString();
+      const far = throttled429();
+      far.responseOptions.headers["retry-after"] = new Date(clock.now().getTime() + 900_000).toUTCString();
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => soon);
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => far);
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => containerList200());
+      const pending = newClient(home.env, { clock }).get("container");
+      try {
+        await waitFor(() => clock.sleeps.length === 1, "the wait after the first 429");
+        expect(clock.sleeps).toEqual([7_000]);
+        expect(calls()).toHaveLength(1);
+        await clock.advance(7_000);
+        await waitFor(() => clock.sleeps.length === 2, "the wait after the second 429");
+        expect(clock.sleeps).toEqual([7_000, 300_000]);
+        expect(calls()).toHaveLength(2);
+        await clock.advance(300_000);
+        await pending;
+        expect(calls()).toHaveLength(3);
+      } finally {
+        await drain(clock, pending);
+      }
     });
   });
 });
@@ -951,11 +1232,15 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
       const first = newClient(home.env, { clock }).lookupConfig("test-event-1");
       const second = newClient(home.env, { clock }).get("container");
 
-      await waitFor(() => lookupReached, "the lookup to reach the mock");
-      await settle();
-      expect(calls().map((call) => call.path)).toEqual(["/1/config"]);
-
-      release.resolve(undefined);
+      try {
+        await waitFor(() => lookupReached, "the lookup to reach the mock");
+        await settle();
+        expect(calls().map((call) => call.path)).toEqual(["/1/config"]);
+      } finally {
+        // Release the process-wide queue on every outcome, so a failed assertion cannot strand the later cases.
+        release.resolve(undefined);
+        await Promise.allSettled([first, second]);
+      }
       await Promise.all([first, second]);
       expect(calls().map((call) => call.path)).toEqual(["/1/config", "/1/container"]);
     });
@@ -992,20 +1277,131 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
       const client = newClient(home.env, { clock });
       const first = client.get<{ id: number }>("container/1/thing/5");
       const second = client.get<{ id: number }>("container/1/thing/6");
-      await waitFor(() => clock.sleeps.length === 1, "the spacing sleep before the second profile read");
-      expect(sentAt).toHaveLength(1);
-      await clock.advance(999);
-      await settle();
-      expect(sentAt).toHaveLength(1);
-      await clock.advance(1);
-      const [five, six] = await Promise.all([first, second]);
-      expect(five.id).toBe(5);
-      expect(six.id).toBe(6);
-      expect(sentAt).toHaveLength(2);
-      const [firstSend, secondSend] = sentAt;
-      if (firstSend === undefined || secondSend === undefined) throw new Error("a send time is missing");
-      expect(secondSend - firstSend).toBeGreaterThanOrEqual(1_000);
-      expect(clock.sleeps).toEqual([1_000]);
+      try {
+        await waitFor(() => clock.sleeps.length === 1, "the spacing sleep before the second profile read");
+        expect(sentAt).toHaveLength(1);
+        await clock.advance(999);
+        await settle();
+        expect(sentAt).toHaveLength(1);
+        await clock.advance(1);
+        const [five, six] = await Promise.all([first, second]);
+        expect(five.id).toBe(5);
+        expect(six.id).toBe(6);
+        expect(sentAt).toHaveLength(2);
+        const [firstSend, secondSend] = sentAt;
+        if (firstSend === undefined || secondSend === undefined) throw new Error("a send time is missing");
+        expect(secondSend - firstSend).toBeGreaterThanOrEqual(1_000);
+        expect(clock.sleeps).toEqual([1_000]);
+      } finally {
+        await drain(clock, first, second);
+      }
+    });
+  });
+
+  it("spaces two profile reads from two clients on one clock: the record is per clock, not per client", async () => {
+    await withSession(async (home) => {
+      const clock = recordingClock();
+      const sentAt: number[] = [];
+      for (const thingId of [5, 6]) {
+        pool()
+          .intercept({ path: `/1/container/1/thing/${String(thingId)}`, method: "GET" })
+          .reply(() => {
+            sentAt.push(clock.now().getTime());
+            return profile200(thingId);
+          });
+      }
+      const first = newClient(home.env, { clock }).get<{ id: number }>("container/1/thing/5");
+      const second = newClient(home.env, { clock }).get<{ id: number }>("container/1/thing/6");
+      try {
+        await waitFor(() => clock.sleeps.length === 1, "the spacing sleep before the second client's profile read");
+        expect(sentAt).toHaveLength(1);
+        expect(clock.sleeps).toEqual([PROFILE_SPACING_MS]);
+        await clock.advance(PROFILE_SPACING_MS);
+        const [five, six] = await Promise.all([first, second]);
+        expect(five.id).toBe(5);
+        expect(six.id).toBe(6);
+        expect(sentAt).toHaveLength(2);
+        const [firstSend, secondSend] = sentAt;
+        if (firstSend === undefined || secondSend === undefined) throw new Error("a send time is missing");
+        expect(secondSend - firstSend).toBeGreaterThanOrEqual(PROFILE_SPACING_MS);
+        expect(clock.sleeps).toEqual([PROFILE_SPACING_MS]);
+      } finally {
+        await drain(clock, first, second);
+      }
+    });
+  });
+
+  it("measures the spacing from the retry's send time when a profile read answered 429 first", async () => {
+    await withSession(async (home) => {
+      const clock = recordingClock();
+      const sentAt: { path: string; at: number }[] = [];
+      const record = (path: string, reply: () => GripReply) => (): GripReply => {
+        sentAt.push({ path, at: clock.now().getTime() });
+        return reply();
+      };
+      pool()
+        .intercept({ path: "/1/container/1/thing/5", method: "GET" })
+        .reply(record("thing/5", () => throttled429()));
+      pool()
+        .intercept({ path: "/1/container/1/thing/5", method: "GET" })
+        .reply(record("thing/5", () => profile200(5)));
+      pool()
+        .intercept({ path: "/1/container/1/thing/6", method: "GET" })
+        .reply(record("thing/6", () => profile200(6)));
+      const client = newClient(home.env, { clock });
+      const first = client.get<{ id: number }>("container/1/thing/5");
+      const second = client.get<{ id: number }>("container/1/thing/6");
+      try {
+        await waitFor(() => clock.sleeps.length === 1, "the backoff wait after the 429");
+        expect(clock.sleeps).toEqual([60_000]);
+        expect(sentAt).toHaveLength(1);
+        await clock.advance(60_000);
+        // After the retry the second profile read either registers its spacing sleep, or leaves at once: the
+        // latter is the defect, and the assertions below name it.
+        await waitFor(
+          () => clock.sleeps.length === 2 || sentAt.length >= 3,
+          "the second profile read to wait or leave",
+        );
+        expect(sentAt.map((entry) => entry.path)).toEqual(["thing/5", "thing/5"]);
+        expect(clock.sleeps).toEqual([60_000, PROFILE_SPACING_MS]);
+        await clock.advance(PROFILE_SPACING_MS);
+        const [five, six] = await Promise.all([first, second]);
+        expect(five.id).toBe(5);
+        expect(six.id).toBe(6);
+        expect(sentAt.map((entry) => entry.path)).toEqual(["thing/5", "thing/5", "thing/6"]);
+        const retryAt = sentAt[1]?.at;
+        const secondAt = sentAt[2]?.at;
+        if (retryAt === undefined || secondAt === undefined) throw new Error("a send time is missing");
+        expect(secondAt - retryAt).toBeGreaterThanOrEqual(PROFILE_SPACING_MS);
+      } finally {
+        await drain(clock, first, second);
+      }
+    });
+  });
+
+  it("bounds the spacing wait by one interval when the clock steps backwards between two profile reads", async () => {
+    await withSession(async (home) => {
+      const clock = recordingClock();
+      pool()
+        .intercept({ path: "/1/container/1/thing/5", method: "GET" })
+        .reply(() => profile200(5));
+      pool()
+        .intercept({ path: "/1/container/1/thing/6", method: "GET" })
+        .reply(() => profile200(6));
+      const client = newClient(home.env, { clock });
+      await client.get("container/1/thing/5");
+      expect(clock.sleeps).toEqual([]);
+      // The system clock stepped back ten minutes: the next read waits one interval, never ten minutes and one.
+      clock.set(clock.now().getTime() - 10 * 60_000);
+      const second = client.get<{ id: number }>("container/1/thing/6");
+      try {
+        await waitFor(() => clock.sleeps.length === 1, "the spacing sleep before the second profile read");
+        expect(clock.sleeps).toEqual([PROFILE_SPACING_MS]);
+        await clock.advance(PROFILE_SPACING_MS);
+        expect((await second).id).toBe(6);
+      } finally {
+        await drain(clock, second);
+      }
     });
   });
 });
@@ -1106,30 +1502,71 @@ describe("[CAP-CLIENT] AC-14 the request timeout and the body cap", () => {
         .reply(() => new Promise<never>(() => undefined));
       const stderr = stderrSink();
       const pending = caught(newClient(home.env, { clock, stderr: stderr.stream }).get("container"));
-      await waitFor(() => calls().length === 1, "the request to reach the mock");
-      await clock.advance(29_999);
-      const early = await Promise.race([pending.then(() => "settled"), settle().then(() => "pending")]);
-      expect(early).toBe("pending");
-      await clock.advance(1);
-      const error = await pending;
+      try {
+        await waitFor(() => calls().length === 1, "the request to reach the mock");
+        await clock.advance(29_999);
+        const early = await Promise.race([pending.then(() => "settled"), settle().then(() => "pending")]);
+        expect(early).toBe("pending");
+        await clock.advance(1);
+        const error = await pending;
+        expect(error).toBeInstanceOf(NetworkError);
+        const gripError = error as GripError;
+        expect(gripError.kind).toBe("network");
+        expect(gripError.hint).toBe("check the connection");
+        expect(gripError.message).toContain("30 s");
+        expect(calls()).toHaveLength(1);
+        expect(stderr.text()).toContain("GET container");
+      } finally {
+        await drain(clock, pending);
+      }
+    });
+  });
+
+  it("raises network, with a redacted cause, when the fetch itself fails, and names the cause's code and message", async () => {
+    await withSession(async (home) => {
+      // No interceptor and no network: the mock agent refuses the connection.
+      const stderr = stderrSink();
+      const error = await caught(newClient(home.env, { stderr: stderr.stream }).get("container/1/unknown-path"));
       expect(error).toBeInstanceOf(NetworkError);
       const gripError = error as GripError;
       expect(gripError.kind).toBe("network");
       expect(gripError.hint).toBe("check the connection");
-      expect(gripError.message).toContain("30 s");
-      expect(calls()).toHaveLength(1);
-      expect(stderr.text()).toContain("GET container");
+      expect(gripError.cause).toBeInstanceOf(Error);
+      // undici wraps every transport failure as `TypeError("fetch failed", { cause })`: the discriminating detail
+      // (a DNS, TLS, reset or, here, the mock's refusal) lives only in the cause, and both the message and the
+      // diagnostic line carry it.
+      const wrapper = gripError.cause as Error & { cause?: unknown };
+      expect(wrapper.message).toBe("fetch failed");
+      const inner = wrapper.cause as Error & { code?: unknown };
+      expect(inner).toBeInstanceOf(Error);
+      expect(inner.code).toBe("UND_MOCK_ERR_MOCK_NOT_MATCHED");
+      expect(gripError.message).toContain(
+        "GET container/1/unknown-path: the request failed: fetch failed (UND_MOCK_ERR_MOCK_NOT_MATCHED: ",
+      );
+      expect(gripError.message).toContain(inner.message);
+      expect(stderr.text()).toContain("the request failed: fetch failed (UND_MOCK_ERR_MOCK_NOT_MATCHED: ");
+      expect(stderr.text()).toContain(inner.message);
     });
   });
 
-  it("raises network, with a redacted cause, when the fetch itself fails", async () => {
+  it("returns a body of exactly 16 MiB whole: the cap refuses the first byte past it, never the last byte under it", async () => {
     await withSession(async (home) => {
-      // No interceptor and no network: the mock agent refuses the connection.
-      const error = await caught(newClient(home.env).get("container/1/unknown-path"));
-      expect(error).toBeInstanceOf(NetworkError);
-      const gripError = error as GripError;
-      expect(gripError.kind).toBe("network");
-      expect(gripError.cause).toBeInstanceOf(Error);
+      const prefix = '{"success":true,"data":"';
+      const suffix = '"}';
+      const padding = "a".repeat(BODY_CAP_BYTES - Buffer.byteLength(prefix + suffix, "utf8"));
+      const body = `${prefix}${padding}${suffix}`;
+      expect(Buffer.byteLength(body, "utf8")).toBe(BODY_CAP_BYTES);
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => ({
+          statusCode: 200,
+          data: body,
+          responseOptions: { headers: { "content-type": "application/json" } },
+        }));
+      const data = await newClient(home.env).get<string>("container");
+      expect(data).toHaveLength(padding.length);
+      expect(data.startsWith("aaaa") && data.endsWith("aaaa")).toBe(true);
+      expect(calls()).toHaveLength(1);
     });
   });
 
@@ -1293,12 +1730,56 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
     });
   });
 
-  it("writes to process.stderr by default and reads the process environment by default", async () => {
-    const client = new GripClient();
-    expect(JSON.stringify(client)).toBe("{}");
-    await withTempHome(async () => {
-      // No session in the default environment's temporary home: refused before any request.
-      expect(await caught(client.get("container"))).toBeInstanceOf(NoSessionError);
+  it("types kind as the union of the fourteen kinds: the base constructor refuses an unknown kind at compile time", () => {
+    // @ts-expect-error -- "not-a-kind" is not a GripErrorKind; the parameter is the union, not string
+    const rejected = new GripError("not-a-kind", "synthetic message 1");
+    expect(rejected.kind).toBe("not-a-kind");
+    expect(new GripError("api", "synthetic message 2").kind).toBe("api");
+  });
+
+  it("writes the diagnostic line to process.stderr by default and reads the session from the config file process.env names by default", async () => {
+    await withTempHome(async (home) => {
+      const secrets = fixtureSecrets();
+      // The session sits in a file only GRIPEVENTSCTL_CONFIG_FILE names, not at the default path under HOME, so a
+      // client that ignored the process environment could not find it through the home-directory fallback.
+      // withTempHome puts the variable back when the test ends.
+      const configFile = join(home.dir, "named-by-the-environment.yaml");
+      process.env["GRIPEVENTSCTL_CONFIG_FILE"] = configFile;
+      await saveConfig(
+        {
+          version: 1,
+          session: {
+            slug: "testevent",
+            container_id: 1,
+            token: secrets.sessionToken,
+            signed_in_at: "2026-10-12T11:00:00Z",
+          },
+          writes: { enabled: false },
+        },
+        { env: { ...process.env } },
+      );
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => containerList200());
+      const written: string[] = [];
+      const write = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      }) as typeof process.stderr.write);
+      try {
+        // Only the dispatcher is injected, so the request stays off the network; the clock, the environment and
+        // stderr take their defaults.
+        const client = new GripClient({ dispatcher: agent });
+        expect(JSON.stringify(client)).toBe("{}");
+        await client.get("container");
+      } finally {
+        write.mockRestore();
+      }
+      expect(written).toContain("GET container: 200\n");
+      const [call] = calls();
+      if (call === undefined) throw new Error("no request recorded");
+      expect(lowerHeaders(call.headers)["x-authorization"]).toBe(secrets.sessionToken);
+      expect((await loadConfig({ env: home.env })).exists).toBe(false);
     });
   });
 
