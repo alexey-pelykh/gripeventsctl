@@ -1,7 +1,7 @@
 {
   "name": "@gripeventsctl/testing",
   "version": "0.0.0",
-  "description": "Test helpers shared by the GripEventsCtl packages: a temporary home, a stub 1Password CLI, a manual clock and per-run fixture secrets",
+  "description": "Test helpers shared by the GripEventsCtl packages: a temporary home, a stub 1Password CLI, a manual clock, per-run fixture secrets, and the mock Grip API with its envelope builders",
   "type": "module",
   "private": true,
   "engines": {
@@ -31,6 +31,7 @@
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
+    "undici": "catalog:",
     "vitest": "catalog:",
     "yaml": "catalog:"
   }

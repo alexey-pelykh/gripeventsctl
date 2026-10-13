@@ -14,3 +14,5 @@ export {
   saveHomeEnv,
   withTempHome,
 } from "./temp-home.js";
+export { GRIP_API_ORIGIN, type StderrSink, gripPool, mockGrip, stderrSink } from "./mock-grip.js";
+export * from "./envelopes/index.js";
