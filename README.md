@@ -30,7 +30,7 @@ The friction in the code is on purpose: writes are off by default, repeats are b
 
 ## Status
 
-This repository holds the workspace scaffold only. The commands below under "Planned surface" do not exist yet.
+This repository holds the workspace scaffold and, in `@gripeventsctl/core`, the transport client the commands will use (`GripClient`: the fixed base URL and header set, the config lookup, the login call, the response envelope and error kinds, the HTTP 429 backoff, paging, one request in flight per process). The commands below under "Planned surface" do not exist yet.
 
 - Nothing is published to npm yet. The npm badges show "not found" until the first release.
 - The binary answers `--version` and `--help`. It has no other commands.
