@@ -17,7 +17,9 @@
  *   JWT-shaped string (`eyJ…`). Any JWT in tracked source is a leak, so this one has no context.
  * - The login `Authorization` value: `Bearer <application token>, Basic <base64(email:password)>`,
  *   both schemes in one header (`docs/api/login.md` § Request).
- * - A `Basic <base64>` value alone: base64 of at least 16 characters after the scheme word.
+ * - A `Basic <base64>` value alone: base64 of at least 16 characters after the scheme word, holding
+ *   at least one character an English word never has (a digit, `+`, `/` or `=`), so prose such as
+ *   `Basic Interoperability Guidelines` is neither flagged by the lint nor garbled by `redactString`.
  * - The per-event application token in its key context: `"token"` under a `"general"` key, or
  *   `general.token` (`docs/api/containers.md` § Fields of a 200 answer).
  *
@@ -54,8 +56,17 @@ const BASE64_VALUE_SOURCE = String.raw`[A-Za-z0-9+/]{16,}={0,2}`;
 export const LOGIN_AUTHORIZATION_PATTERN_SOURCE =
   String.raw`(Bearer\s+)(` + TOKEN_CHARACTER_SOURCE + String.raw`{8,})(,\s*Basic\s+)(` + BASE64_VALUE_SOURCE + ")";
 
-/** A `Basic <base64>` value alone. Groups: scheme, base64. */
-export const BASIC_PATTERN_SOURCE = String.raw`(\bBasic\s+)(` + BASE64_VALUE_SOURCE + ")";
+/**
+ * A base64 value that is not a plain word: the lookahead requires the run to hold a digit, `+`, `/`
+ * or `=` before anything else follows it, and is linear like the run itself. A real value made only
+ * of letters (a share of about (52/64)^n of the values of n characters) is the accepted residual of
+ * the lint; the live `Basic` value is registered through `registerSecret()` as it is built, so
+ * `redactString` replaces it whatever its shape.
+ */
+const NON_WORD_BASE64_VALUE_SOURCE = String.raw`(?=[A-Za-z]*[0-9+/=])` + BASE64_VALUE_SOURCE;
+
+/** A `Basic <base64>` value alone, where the base64 is not a plain word. Groups: scheme, base64. */
+export const BASIC_PATTERN_SOURCE = String.raw`(\bBasic\s+)(` + NON_WORD_BASE64_VALUE_SOURCE + ")";
 
 /** The application token in its key context. Groups: key context, separator, token. */
 export const APPLICATION_TOKEN_PATTERN_SOURCE =

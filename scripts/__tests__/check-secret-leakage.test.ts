@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Oleksii PELYKH
 
 /**
- * Repository-gate cases for `scripts/check-secret-leakage.ts` (CAP-REDACT R15 to R18). The script
+ * Repository-gate cases for `scripts/check-secret-leakage.ts` (CAP-REDACT R15 to R19). The script
  * runs `main()` at import and scans the tracked files of the current working directory, so every
  * case spawns it as a process with `cwd` set to a temporary git repository holding committed
  * fixture secrets. The secret values are generated per run; none is a literal in this file.
@@ -175,6 +175,26 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     write("clean.txt", "nothing secret here\n");
     commitAll();
     write("untracked.txt", `user_token: ${secrets.sessionToken}\n`);
+
+    const result = runCheck();
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
+    write(
+      "docs/prose.md",
+      [
+        "# Prose",
+        "",
+        "Basic Interoperability Guidelines apply here.",
+        "The Basic Responsibilities of a maintainer.",
+        "Basic Authentication is the scheme.",
+        "",
+      ].join("\n"),
+    );
+    commitAll();
 
     const result = runCheck();
 
