@@ -26,6 +26,20 @@ interface Secrets {
   chatToken: string;
   applicationToken: string;
   basic: string;
+  /** The shape of the platform's public bootstrap bearer (32 letters and digits), never its value. */
+  bootstrapBearer: string;
+}
+
+const BEARER_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/**
+ * A per-run 32-character value of letters and digits: the shape of the public bootstrap bearer
+ * `docs/api/containers.md` prints, so the case keeps proving that a bare `Bearer <value>` line is
+ * unflagged by the lint, without committing the platform's real value. Never JWT-shaped.
+ */
+function syntheticBearer(): string {
+  const value = Array.from(randomBytes(32), (byte) => BEARER_ALPHABET.charAt(byte % BEARER_ALPHABET.length)).join("");
+  return value.startsWith("eyJ") ? `A${value.slice(1)}` : value;
 }
 
 function fixtureSecrets(): Secrets {
@@ -35,6 +49,7 @@ function fixtureSecrets(): Secrets {
     chatToken: `eyJ${segment(24)}.${segment(60)}.${segment(32)}`,
     applicationToken: randomBytes(16).toString("hex"),
     basic: Buffer.from(`test.person.1@example.com:${segment(18)}`, "utf8").toString("base64"),
+    bootstrapBearer: syntheticBearer(),
   };
 }
 
@@ -51,16 +66,23 @@ function shapedFiles(secrets: Secrets): Record<string, string> {
   };
 }
 
-const PLACEHOLDERS = [
-  "X-Authorization: <user_token>",
-  '-H "X-Authorization: $GRIPEVENTSCTL_TOKEN"',
-  '"user_token": "<session token: a 36-character UUID>"',
-  '"Token": "<AWS Cognito token: a JWT about 1,000 characters long>"',
-  "Authorization: Bearer <application_token>, Basic <base64(email:password)>",
-  'Authorization: Bearer $GRIPEVENTSCTL_APP_TOKEN, Basic $BASIC"',
-  "Authorization: Bearer 8tnDoVVUeuFAGj4ztm9yuzYhG4vGznfz",
-  "`data.application.general.token` is the per-event application token.",
-];
+/**
+ * The forms the `docs/api/` pages print, none a secret: the lint leaves each alone. The bare `Bearer`
+ * line stands for the public bootstrap bearer `docs/api/containers.md` prints (a runtime-only shape);
+ * its value here is the per-run synthetic one.
+ */
+function placeholders(bootstrapBearer: string): string[] {
+  return [
+    "X-Authorization: <user_token>",
+    '-H "X-Authorization: $GRIPEVENTSCTL_TOKEN"',
+    '"user_token": "<session token: a 36-character UUID>"',
+    '"Token": "<AWS Cognito token: a JWT about 1,000 characters long>"',
+    "Authorization: Bearer <application_token>, Basic <base64(email:password)>",
+    'Authorization: Bearer $GRIPEVENTSCTL_APP_TOKEN, Basic $BASIC"',
+    `Authorization: Bearer ${bootstrapBearer}`,
+    "`data.application.general.token` is the per-event application token.",
+  ];
+}
 
 let repo: string;
 
@@ -116,7 +138,7 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     const secrets = fixtureSecrets();
     const files = shapedFiles(secrets);
     for (const [name, content] of Object.entries(files)) write(`fixtures/${name}`, content);
-    write("README.md", `# Fixtures\n\n${PLACEHOLDERS.join("\n")}\n`);
+    write("README.md", `# Fixtures\n\n${placeholders(secrets.bootstrapBearer).join("\n")}\n`);
     commitAll();
 
     const result = runCheck();
@@ -157,7 +179,10 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
   });
 
   it("R17: a clean repository holding only the docs placeholders exits 0 with nothing on stderr", () => {
-    write("docs/api/README.md", `# Placeholders\n\n${PLACEHOLDERS.join("\n")}\n`);
+    const { bootstrapBearer } = fixtureSecrets();
+    expect(bootstrapBearer).toMatch(/^[A-Za-z0-9]{32}$/);
+    expect(bootstrapBearer.startsWith("eyJ")).toBe(false);
+    write("docs/api/README.md", `# Placeholders\n\n${placeholders(bootstrapBearer).join("\n")}\n`);
     write("src/index.ts", 'export const userToken = "<user_token>";\n');
     commitAll();
 
