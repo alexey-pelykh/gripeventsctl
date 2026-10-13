@@ -37,6 +37,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm license-check
       - run: pnpm test
+      - run: pnpm check-oracles
 
   # Supply-chain audit gate. Runs BEFORE publish-npm to block release
   # if any direct or transitive dependency has a known high/critical CVE.
