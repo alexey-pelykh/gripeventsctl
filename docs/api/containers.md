@@ -37,19 +37,28 @@ The 2024 and 2023 World Summit AI editions exist (container ids `7509` and `6353
 
 ### Fields of a 200 answer
 
-| Field                                           | Meaning                                                                                                                                   |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `data.container.general.display_name`           | The event's display name, for example "World Summit AI Amsterdam 2026".                                                                   |
-| `data.container.general.name`                   | The container name. The existing slug checker falls back to it when `display_name` is empty.                                              |
-| `data.container.general.active`                 | `1` while the edition is live, `0` once it has ended.                                                                                     |
-| `data.application.general.application_name`     | The organiser's white-label application, for example "Inspired Minds".                                                                    |
-| `data.application.general.application_id`       | Its numeric id, for example `165`.                                                                                                        |
-| `data.application.general.token`                | The per-event application token. The login call needs it (see [login.md](login.md)). Never paste it anywhere.                             |
-| `data.application.permissions.type_permissions` | The type permissions of the application. Use it to confirm a year's type set (see [attendees.md](attendees.md#types)).                    |
-| `default_container_id`                          | The application's current default event, **not** the looked-up container's id. It was `9840` for every Inspired Minds slug on 2026-10-07. |
+| Field                                           | Meaning                                                                                                                                                                                                                                                                |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data.container.general.container_id`           | The looked-up container's own id. **Verified live 2026-10-13**: `9840` for `wsai26`. The answer for `wsai25` (`active=0`) had no such key, and no field of that answer carried the container's id (`8869`). See the key paths read below.                              |
+| `data.container.general.display_name`           | The event's display name, for example "World Summit AI Amsterdam 2026".                                                                                                                                                                                                |
+| `data.container.general.name`                   | The container name. The existing slug checker falls back to it when `display_name` is empty.                                                                                                                                                                           |
+| `data.container.general.active`                 | `1` while the edition is live, `0` once it has ended.                                                                                                                                                                                                                  |
+| `data.application.general.application_name`     | The organiser's white-label application, for example "Inspired Minds".                                                                                                                                                                                                 |
+| `data.application.general.application_id`       | Its numeric id, for example `165`.                                                                                                                                                                                                                                     |
+| `data.application.general.token`                | The per-event application token. The login call needs it (see [login.md](login.md)). Never paste it anywhere.                                                                                                                                                          |
+| `data.application.permissions.type_permissions` | The type permissions of the application. Use it to confirm a year's type set (see [attendees.md](attendees.md#types)).                                                                                                                                                 |
+| `data.application.login.default_container_id`   | The application's current default event, **not** the looked-up container's id. It was `9840` for every Inspired Minds slug on 2026-10-07, and `9840` again in both the `wsai26` and the `wsai25` answer of 2026-10-13. **Verified live 2026-10-13**, nesting included. |
 
-The source does not record the exact nesting of `default_container_id` in the response.
-It also does not record which field holds the looked-up container's own id (not verified).
+**Key paths read on 2026-10-13** from the two 200 answers (`wsai26`, `active=1`; `wsai25`, `active=0`), as names and types only:
+
+- The top level holds `success` (boolean) and `data` (object); `data` holds `date_now` (number), `container` (object) and `application` (object).
+- `data.container.general` for `wsai26`: `container_id` (number), `active` (number), `name` (string), `display_name` (string), `search_disabled` (number), `type` (string), `website_url` (null), `branch_url` (string), `home_page_background_url` (string), `external_venue_id` (null), `is_launched` (number), `container_contact_sharing` (string), `contact_sharing_options` (array), `show_userfeed_navigation` (number), `allow_virtual_meeting_room` (number), `format` (string), `homefeed_blocks_available` (number), `has_sessions` (number), `allow_instant_meeting` (number), `instant_time_data_lock` (number), `virtual_meeting_room_mode` (string), `virtual_meeting_room_provider` (string), `virtual_meeting_room_provider_key` (null), `pending_meeting_block` (number), `allow_virtual_meeting_start_before` (number), `allow_speed_networking` (number), `allow_session_location_groupchat` (number) and `agenda_display_format` (string).
+  Beside `general`, `data.container` held `style`, `locale`, `search`, `login`, `hosted_buyer`, `right_navigation_menu` and `feature_control` (objects) and `user_agreements` and `help_links` (arrays).
+- `data.container.general` for `wsai25`: only `active` (number), `default_locale` (string), `name` (string), `theme_primary_color` (string), `primary_color` (string) and `display_name` (string).
+  `data.container` held nothing beside `general`, and `data.application` had no `permissions`.
+  One live and one ended edition were read, so whether every live edition carries `container_id` is still open (see [not-verified.md](not-verified.md#containers)).
+- `data.application.general`, the same in both answers: `token` (string, the application token: never paste it), `application_id` (number), `grip_cdp_token` (string, not read and not to be pasted either), `application_name` (string), `min_app_version` (null) and `domains` (array).
+- `data.application.login.default_container_id` is the only `default_container_id` key in either answer.
 
 ### Example
 

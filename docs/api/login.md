@@ -12,7 +12,7 @@ Conventions, headers and labels are in [README.md](README.md).
 
 The login call needs two values you get from the config lookup first (see [containers.md](containers.md)):
 
-- the container id. The 2026 id (`9840`) was found through the config lookup for the event's slug. The field of the config response that carries the looked-up container's id is not recorded in the sources (not verified). Do not use `default_container_id`: it names the application's current default event, not the looked-up container.
+- the container id. The 2026 id (`9840`) was found through the config lookup for the event's slug. The config response carries it in `data.container.general.container_id` (verified live 2026-10-13 for `wsai26`; the ended edition `wsai25` answered without that key, see [containers.md](containers.md#fields-of-a-200-answer)). Do not use `default_container_id`: it names the application's current default event, not the looked-up container.
 - the per-event application token, `data.application.general.token` of the same config.
 
 ## Request

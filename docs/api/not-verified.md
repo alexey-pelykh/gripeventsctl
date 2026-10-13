@@ -26,8 +26,7 @@ Run them only on the account owner's explicit go-ahead.
 
 ## Containers
 
-- **Which field of the config response holds the looked-up container's own id.** The sources record only that `default_container_id` is not it. Verify by reading a config answer for a slug whose id is known (for example `wsai26`, id `9840`). See [containers.md](containers.md).
-- **The exact nesting of `default_container_id`** in the config answer. Verify by reading a config answer.
+- **Whether `data.container.general.container_id` is present in every config answer.** On 2026-10-13 it carried the looked-up container's own id (`9840`) for `wsai26`, but the answer for `wsai25` (`active=0`) had no such key and no field carrying that container's id (`8869`); only those two slugs were read. Verify by reading a config answer for a second live slug whose id is known, and for another ended edition. See [containers.md](containers.md#fields-of-a-200-answer).
 
 ## Attendees
 
