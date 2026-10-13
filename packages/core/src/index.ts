@@ -2,8 +2,14 @@
 // Copyright (C) 2026 Oleksii PELYKH
 
 export {
+  APPLICATION_TOKEN_PATTERN_SOURCE,
+  BASIC_PATTERN_SOURCE,
+  BEARER_PATTERN_SOURCE,
   JWT_PATTERN_SOURCE,
+  LOGIN_AUTHORIZATION_PATTERN_SOURCE,
+  MIN_REGISTERED_SECRET_LENGTH,
   REDACTED,
+  RUNTIME_ONLY_PATTERN_SOURCES,
   SECRET_PATTERN_SOURCES,
   SESSION_TOKEN_PATTERN_SOURCE,
   UUID_PATTERN_SOURCE,
@@ -11,7 +17,69 @@ export {
   registerSecret,
 } from "./lib/redact.js";
 export { type Clock, systemClock } from "./lib/clock.js";
-export { ConfigError, GripError, NoSessionError } from "./transport/errors.js";
+export {
+  ApiError,
+  AuthFailedError,
+  BODY_EXCERPT_LENGTH,
+  ConfigError,
+  ConflictError,
+  GatedTypeError,
+  GripError,
+  type GripErrorKind,
+  type GripErrorOptions,
+  LoadBalancerRejectedError,
+  ModePhaseError,
+  NetworkError,
+  NoSessionError,
+  SwipeCapError,
+  ThrottledError,
+  UnknownSlugError,
+  UsageError,
+  WriteRefusedError,
+  isGripError,
+} from "./transport/errors.js";
+export {
+  API_ORIGIN,
+  BASE_URL,
+  BOOTSTRAP_BEARER,
+  GRIP_VERSION,
+  type HeaderSet,
+  LOGIN_SOURCE,
+  USER_AGENT,
+  WEB_APP_ORIGIN,
+  WEB_APP_REFERER,
+  authenticatedHeaders,
+  loginHeaders,
+  lookupHeaders,
+} from "./transport/headers.js";
+export { MAX_RETRIES, RETRY_AFTER_CAP_S, SCHEDULE_S, backoffWaitS, parseRetryAfter } from "./transport/backoff.js";
+export {
+  type ConfigLookup,
+  type Envelope,
+  type LoginAnswer,
+  MODE_PHASE_REASON,
+  SWIPE_CAP_REASON,
+  THROTTLING_REASON,
+  UNKNOWN_SLUG_REASON,
+  configLookupSchema,
+  envelopeSchema,
+  loginAnswerSchema,
+} from "./transport/envelope.js";
+export {
+  BODY_CAP_BYTES,
+  type GetOptions,
+  GripClient,
+  type GripClientOptions,
+  type LoginInput,
+  type LoginResult,
+  PROFILE_SPACING_MS,
+  type PagesOptions,
+  type PostOptions,
+  type Query,
+  REQUEST_TIMEOUT_MS,
+  isDirectorySearchPath,
+  isProfilePath,
+} from "./transport/client.js";
 export {
   CONFIG_VERSION,
   type Config,
