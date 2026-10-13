@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Oleksii PELYKH
+
+import { writeFile } from "node:fs/promises";
+import type { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
+
+import { type TempHome, fixtureSecrets, withTempHome } from "@gripeventsctl/testing";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { describe, expect, it } from "vitest";
+
+const CLI = fileURLToPath(new URL("../../dist/cli.js", import.meta.url));
+
+interface Run {
+  /** Every stderr line the server wrote before the client closed it. */
+  stderrLines: string[];
+  /** The transport errors the client saw: a non-protocol line on stdout is one. */
+  errors: Error[];
+  /** The server name from the initialize handshake. */
+  serverName: string | undefined;
+}
+
+/** Start the built binary as `gripeventsctl mcp` with `home`, run one protocol exchange, stop it. */
+async function runServer(home: TempHome): Promise<Run> {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [CLI, "mcp"],
+    env: {
+      ...getDefaultEnvironment(),
+      HOME: home.dir,
+      USERPROFILE: home.dir,
+      GRIPEVENTSCTL_CONFIG_FILE: home.configFile,
+    },
+    stderr: "pipe",
+  });
+  let stderr = "";
+  (transport.stderr as Readable | null)?.on("data", (chunk: Buffer | string) => {
+    stderr += chunk.toString();
+  });
+  const errors: Error[] = [];
+  const client = new Client({ name: "mcp-start-line-test", version: "0.0.0" });
+  client.onerror = (error) => {
+    errors.push(error);
+  };
+  await client.connect(transport);
+  try {
+    // The server has no tools yet, so the round trip after the handshake is a ping.
+    await client.ping();
+    return {
+      stderrLines: stderr.split(/\r?\n/).filter((line) => line !== ""),
+      errors,
+      serverName: client.getServerVersion()?.name,
+    };
+  } finally {
+    await client.close();
+  }
+}
+
+describe("[CAP-PARITY] the gripeventsctl mcp start line", () => {
+  it("writes one stderr line naming the config path and `no config`, and only protocol frames to stdout", async () => {
+    await withTempHome(async (home) => {
+      const run = await runServer(home);
+      expect(run.errors).toEqual([]);
+      expect(run.serverName).toBe("gripeventsctl");
+      expect(run.stderrLines).toEqual([`gripeventsctl mcp: config ${home.configFile}, no config`]);
+    });
+  });
+
+  it("says `safe mode` or `writes enabled` from the config file", async () => {
+    await withTempHome(async (home) => {
+      const token = fixtureSecrets().sessionToken;
+      const yaml = (enabled: boolean): string =>
+        `version: 1\nsession:\n  slug: testevent1\n  container_id: 1\n  token: ${token}\n  signed_in_at: 2026-10-12T19:09:00Z\nwrites:\n  enabled: ${String(enabled)}\n`;
+      await writeFile(home.configFile, yaml(false), { mode: 0o600 });
+      expect((await runServer(home)).stderrLines).toEqual([`gripeventsctl mcp: config ${home.configFile}, safe mode`]);
+      await writeFile(home.configFile, yaml(true), { mode: 0o600 });
+      expect((await runServer(home)).stderrLines).toEqual([
+        `gripeventsctl mcp: config ${home.configFile}, writes enabled`,
+      ]);
+    });
+  });
+
+  it("names the config error and still serves the protocol when the file is invalid", async () => {
+    await withTempHome(async (home) => {
+      await writeFile(home.configFile, "version: 1\nsessions: {}\n", { mode: 0o600 });
+      const run = await runServer(home);
+      expect(run.errors).toEqual([]);
+      expect(run.stderrLines).toHaveLength(1);
+      expect(run.stderrLines[0]).toContain(`gripeventsctl mcp: config ${home.configFile}, config error:`);
+      expect(run.stderrLines[0]).toContain('unknown key "sessions"');
+    });
+  });
+});
