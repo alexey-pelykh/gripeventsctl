@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
-import { GRIP_API_ORIGIN, fixtureSecrets } from "@gripeventsctl/testing";
+import { MOCK_API_ORIGIN, fixtureSecrets } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
 import { REDACTED, redactString } from "../lib/redact.js";
@@ -33,7 +33,7 @@ describe("[CAP-CLIENT] the fixed origin, base URL and version strings (docs/api/
   });
 
   it("restates the same origin in @gripeventsctl/testing, which depends on no workspace package", () => {
-    expect(GRIP_API_ORIGIN).toBe(API_ORIGIN);
+    expect(MOCK_API_ORIGIN).toBe(API_ORIGIN);
   });
 
   it("sends the desktop browser User-Agent and the web app's version string the pages record", () => {

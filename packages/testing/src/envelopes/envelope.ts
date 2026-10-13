@@ -3,9 +3,9 @@
 
 import { type GripReply, jsonReply } from "./reply.js";
 
-/** docs/api/README.md § Response envelope: `{ "success": true, "data": <object, array or string> }`, on 200 unless the page records another status. */
-export function success200(data: unknown, statusCode = 200): GripReply {
-  return jsonReply(statusCode, { success: true, data });
+/** docs/api/README.md § Response envelope: `{ "success": true, "data": <object, array or string> }` on HTTP 200. */
+export function success200(data: unknown): GripReply {
+  return jsonReply(200, { success: true, data });
 }
 
 /** docs/api/README.md § Response envelope: an error answers `"success": false` with `data` carrying the reason. */
