@@ -38,21 +38,11 @@ export {
   WriteRefusedError,
   isGripError,
 } from "./transport/errors.js";
-export {
-  API_ORIGIN,
-  BASE_URL,
-  BOOTSTRAP_BEARER,
-  GRIP_VERSION,
-  type HeaderSet,
-  LOGIN_SOURCE,
-  USER_AGENT,
-  WEB_APP_ORIGIN,
-  WEB_APP_REFERER,
-  authenticatedHeaders,
-  loginHeaders,
-  lookupHeaders,
-} from "./transport/headers.js";
-export { MAX_RETRIES, RETRY_AFTER_CAP_S, SCHEDULE_S, backoffWaitS, parseRetryAfter } from "./transport/backoff.js";
+// The issue's § Public interface names the four address and version constants; the header builders
+// stay inside the client, the one place the queue, the backoff, the timeout, the body cap and the
+// redirect refusal are enforced, so no later package can build a Grip request around them.
+export { API_ORIGIN, BASE_URL, GRIP_VERSION, USER_AGENT } from "./transport/headers.js";
+export { MAX_RETRIES, RETRY_AFTER_CAP_S, SCHEDULE_S } from "./transport/backoff.js";
 export {
   type ConfigLookup,
   type Envelope,
@@ -61,9 +51,6 @@ export {
   SWIPE_CAP_REASON,
   THROTTLING_REASON,
   UNKNOWN_SLUG_REASON,
-  configLookupSchema,
-  envelopeSchema,
-  loginAnswerSchema,
 } from "./transport/envelope.js";
 export {
   BODY_CAP_BYTES,
@@ -77,8 +64,6 @@ export {
   type PostOptions,
   type Query,
   REQUEST_TIMEOUT_MS,
-  isDirectorySearchPath,
-  isProfilePath,
 } from "./transport/client.js";
 export {
   CONFIG_VERSION,
