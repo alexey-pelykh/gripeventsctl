@@ -6,13 +6,15 @@ import { defineConfig } from "vitest/config";
 /**
  * Unit tests (`pnpm test`). The setup file of `@gripeventsctl/testing` points `HOME`,
  * `USERPROFILE` and `GRIPEVENTSCTL_CONFIG_FILE` at a temporary directory for every test file and
- * fails a test that reaches outside it. The live suite lives in `packages/e2e` only.
+ * fails a test that reaches outside it. The `forks` pool is pinned so a test may change the
+ * working directory, which a worker thread cannot. The live suite lives in `packages/e2e` only.
  */
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**", "**/*.e2e.test.ts"],
     setupFiles: ["@gripeventsctl/testing/setup"],
+    pool: "forks",
     testTimeout: 15_000,
   },
 });

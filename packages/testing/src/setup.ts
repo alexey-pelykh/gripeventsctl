@@ -3,19 +3,28 @@
 
 /**
  * Vitest `setupFiles` entry: every test file runs with `HOME`, `USERPROFILE` and
- * `GRIPEVENTSCTL_CONFIG_FILE` pointing at a temporary directory of its own. After each test the
- * config path and the paths derived from it are checked to lie inside that directory, and after
- * the file the real home directory's `.gripeventsctl*` files are checked to be as they were. A
- * test that reaches the real home directory fails.
+ * `GRIPEVENTSCTL_CONFIG_FILE` pointing at a temporary directory of its own.
+ *
+ * After each test, the config path and the paths derived from it (resolved from `process.env`,
+ * plus the `writes.send_log` of a config file found at that path) must lie inside that directory.
+ * After the file, the real home directory's `.gripeventsctl*` files must be as they were. A test
+ * that leaves the variables pointing elsewhere, or writes the real config, fails.
+ *
+ * What the guard cannot see: a store built from an explicit `env` object that names another
+ * directory, and a read of the real config file. Tests pass `withTempHome()`'s `env` for that.
+ * A real gripeventsctl process of yours that writes `~/.gripeventsctl.yaml` while the suite runs
+ * trips the after-file check too; the message says so.
  */
 
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 
 import { afterAll, afterEach } from "vitest";
+import { parse } from "yaml";
 
-import { CONFIG_FILE_NAME, createTempHome, removeTempHome } from "./temp-home.js";
+import { guardedPaths } from "./guarded-paths.js";
+import { createTempHome, removeTempHome } from "./temp-home.js";
 
 /** The files this guard watches in the real home directory. */
 const GUARDED_FILE_NAMES = [
@@ -45,13 +54,24 @@ async function snapshot(dir: string): Promise<Map<string, FileState>> {
   return states;
 }
 
-/** The same path rule as `@gripeventsctl/core`, restated because this package depends on no workspace package. */
-function resolvedPaths(env: NodeJS.ProcessEnv): string[] {
-  const home = (process.platform === "win32" ? env["USERPROFILE"] : env["HOME"]) ?? "";
-  const override = env["GRIPEVENTSCTL_CONFIG_FILE"];
-  const configPath = override === undefined || override === "" ? join(home, CONFIG_FILE_NAME) : override;
-  const prefix = configPath.endsWith(".yaml") ? configPath.slice(0, -".yaml".length) : configPath;
-  return [configPath, `${prefix}.send-log.jsonl`, `${prefix}.go-aheads.jsonl`, `${prefix}.write.lock`];
+/** The `writes.send_log` of the config file at `path`, when the file exists and names one. */
+async function configuredSendLog(path: string): Promise<string | undefined> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    return undefined;
+  }
+  try {
+    const data: unknown = parse(text);
+    if (typeof data !== "object" || data === null) return undefined;
+    const writes: unknown = (data as Record<string, unknown>)["writes"];
+    if (typeof writes !== "object" || writes === null) return undefined;
+    const sendLog: unknown = (writes as Record<string, unknown>)["send_log"];
+    return typeof sendLog === "string" ? sendLog : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isInside(path: string, root: string): boolean {
@@ -64,8 +84,17 @@ const before = await snapshot(realHome);
 const home = await createTempHome("gripeventsctl-test-home-");
 const root = resolve(home.dir);
 
-afterEach(() => {
-  const outside = resolvedPaths(process.env).filter((path) => !isInside(path, root));
+afterEach(async () => {
+  const paths = guardedPaths(process.env);
+  const sendLog = await configuredSendLog(paths.config);
+  const candidates = [
+    paths.config,
+    paths.sendLog,
+    paths.goAheads,
+    paths.writeLock,
+    ...(sendLog === undefined ? [] : [sendLog]),
+  ];
+  const outside = candidates.filter((path) => !isInside(path, root));
   if (outside.length > 0) {
     throw new Error(
       `the test left a config path outside the temporary home ${root}: ${outside.join(", ")} ` +
@@ -89,7 +118,10 @@ afterAll(async () => {
       );
     });
     if (changed.length > 0) {
-      throw new Error(`a test touched the real home directory ${realHome}: ${changed.join(", ")} changed`);
+      throw new Error(
+        `the real home directory ${realHome} changed while this test file ran: ${changed.join(", ")} ` +
+          "(a test reached the real home, or a gripeventsctl process of yours wrote it during the run)",
+      );
     }
   } finally {
     await removeTempHome(home);

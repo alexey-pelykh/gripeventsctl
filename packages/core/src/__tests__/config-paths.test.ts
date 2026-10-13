@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 
+import { guardedPaths } from "@gripeventsctl/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CONFIG_FILE_ENV, configPath, derivedPaths, insideGitWorkTree, workTreeWarnings } from "../config/paths.js";
@@ -17,6 +18,8 @@ describe("[CAP-CFG] the config path and the paths derived from it", () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), "gripeventsctl-paths-"));
+    // The work-tree cases below need a temporary directory that is not itself inside a checkout.
+    expect(insideGitWorkTree(dir), `os.tmpdir() (${tmpdir()}) must not lie inside a git work tree`).toBe(false);
   });
 
   afterEach(async () => {
@@ -39,6 +42,16 @@ describe("[CAP-CFG] the config path and the paths derived from it", () => {
       const path = configPath(env);
       expect(dirname(path)).not.toBe(cwd);
       expect(path.startsWith(cwd + sep)).toBe(false);
+    }
+  });
+
+  it("agrees with the path rule the test guard of @gripeventsctl/testing restates", () => {
+    for (const env of [
+      { [HOME_NAME]: dir },
+      { [HOME_NAME]: dir, [CONFIG_FILE_ENV]: join(dir, "elsewhere", "c.yaml") },
+    ]) {
+      const path = configPath(env);
+      expect(guardedPaths(env)).toEqual({ config: path, ...derivedPaths(path, emptyConfig()) });
     }
   });
 

@@ -1,9 +1,10 @@
 # @gripeventsctl/testing
 
-Test helpers shared by the GripEventsCtl packages. This package is **private** (never published) and depends on no other workspace package. A package that uses it adds `"@gripeventsctl/testing": "workspace:^"` under `devDependencies`.
+Test helpers shared by the GripEventsCtl packages. This package is **private** (never published) and depends on no other workspace package. A package that uses it adds `"@gripeventsctl/testing": "workspace:^"` under `devDependencies` and names the setup entry in its `vitest.config.ts`.
 
-- `withTempHome(fn)`: a fresh temporary directory set as `HOME`, `USERPROFILE` and `GRIPEVENTSCTL_CONFIG_FILE` for one test, removed afterwards.
-- `@gripeventsctl/testing/setup`: a Vitest `setupFiles` entry that points those variables at a temporary directory for every test file, fails a test that leaves a resolved config, send log, journal or lock path outside it, and fails the file if the real home directory's `.gripeventsctl*` files changed. No unit test can reach the real home directory.
-- `stubOp(script)`: a POSIX shell script named `op` on a temporary directory prepended to `PATH`, recording its argv, stdin and environment for each call and answering from the script. POSIX only.
-- `fakeClock()`: a manual `Clock` whose `now()` the test sets and whose `sleep()` resolves when the test advances it.
-- `fixtureSecrets()`: a per-run session token, chat token, application token, password and `Basic` value; never a literal in a committed file.
+- `withTempHome(fn)`: a fresh temporary directory set as `HOME`, `USERPROFILE` and `GRIPEVENTSCTL_CONFIG_FILE` for one test, removed afterwards; `fn` receives `{ dir, configFile, env }`. The pieces (`createTempHome`, `removeTempHome`, `saveHomeEnv`, `restoreHomeEnv`, `HOME_ENV_NAMES`) are exported too.
+- `@gripeventsctl/testing/setup`: a Vitest `setupFiles` entry that points those variables at a temporary directory for every test file, fails a test that leaves the resolved config, send log, journal or lock path (or the `writes.send_log` of a config file at that path) outside it, and fails the file if the real home directory's five `.gripeventsctl*` files changed while it ran. It cannot see a store built from an explicit `env` naming another directory, nor a read of the real config; tests pass `withTempHome()`'s `env` for that.
+- `guardedPaths(env)`: the config path and the three derived paths by the same rule `@gripeventsctl/core` applies, restated here; `packages/core/src/__tests__/config-paths.test.ts` asserts the two agree.
+- `stubOp(script)`: a POSIX shell script named `op` on a temporary directory prepended to `process.env.PATH` until `remove()` is called, recording argv, stdin and environment for each call and answering from the script. `STUB_OP_SUPPORTED` is false on Windows, where a test skips with the reason in its name.
+- `fakeClock(start?)`: a manual `Clock` whose `now()` the test sets (`set`) and advances (`advance`), and whose `sleep()` and `timeoutSignal()` fire when the clock passes their due time. `FAKE_CLOCK_START` is the default start.
+- `fixtureSecrets()`: a per-run session token, chat token, application token, password, the email (`FIXTURE_EMAIL`) and the `Basic` value; never a literal in a committed file.

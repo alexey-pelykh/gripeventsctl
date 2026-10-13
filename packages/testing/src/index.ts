@@ -4,8 +4,8 @@
 export { type Clock, FAKE_CLOCK_START, type FakeClock, fakeClock } from "./fake-clock.js";
 export { FIXTURE_EMAIL, type FixtureSecrets, fixtureSecrets } from "./fixture-secrets.js";
 export { type OpCall, type OpStub, STUB_OP_SUPPORTED, stubOp } from "./stub-op.js";
+export { CONFIG_FILE_NAME, type GuardedPaths, guardedPaths } from "./guarded-paths.js";
 export {
-  CONFIG_FILE_NAME,
   HOME_ENV_NAMES,
   type TempHome,
   createTempHome,

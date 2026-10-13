@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
+/**
+ * A temporary home directory for one test: `HOME`, `USERPROFILE` and `GRIPEVENTSCTL_CONFIG_FILE`
+ * point at a fresh `fs.mkdtemp` directory while the test runs, and the directory is removed
+ * afterwards. The per-file guard in `setup.ts` uses the same pieces.
+ */
+
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CONFIG_FILE_NAME } from "./guarded-paths.js";
+
 /** The environment variables a temporary home overrides. */
 export const HOME_ENV_NAMES = ["HOME", "USERPROFILE", "GRIPEVENTSCTL_CONFIG_FILE"] as const;
-
-export const CONFIG_FILE_NAME = ".gripeventsctl.yaml";
 
 export interface TempHome {
   /** The temporary directory that stands in for the home directory. */

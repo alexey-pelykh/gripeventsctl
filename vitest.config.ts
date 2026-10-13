@@ -3,9 +3,14 @@
 
 import { defineConfig } from "vitest/config";
 
+/**
+ * The root run (`pnpm test:coverage`): one project per package, each with its own
+ * `vitest.config.ts` (and so the temporary-home guard of `@gripeventsctl/testing`), plus the
+ * script self-tests. `pnpm test` runs the packages through Turborepo instead.
+ */
 export default defineConfig({
   test: {
-    testTimeout: 15000,
+    projects: ["packages/*", { test: { name: "scripts", include: ["scripts/**/*.test.ts"] } }],
     exclude: ["**/node_modules/**", "**/dist/**", "**/*.e2e.test.ts"],
     coverage: {
       provider: "v8",

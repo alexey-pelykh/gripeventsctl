@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
+/**
+ * Per-run secret-shaped fixture values: a session token, a chat token, an application token, a
+ * password and the `Basic` value. Generated at run time so no secret-shaped literal ever sits in
+ * a committed file.
+ */
+
 import { randomBytes, randomUUID } from "node:crypto";
 
 export interface FixtureSecrets {
