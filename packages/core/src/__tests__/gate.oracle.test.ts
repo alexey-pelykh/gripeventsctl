@@ -289,7 +289,7 @@ describe.skipIf(subject === undefined)(
               return Promise.resolve("has_match_none");
             },
             allowedStatus: "has_match_none",
-            // (value open: OQ-6 — docs/api/interest.md § The answers says the no answer is from the app code and not
+            // (value open: OQ-6 — docs/api/interest.md § Send an answer says the no answer is from the app code and not
             // verified as a POST; the gated-writes item ships interest skip only after a recorded live no; amend this
             // path or verb if the live run shows another)
             request: { method: "POST", path: "container/1/thing/user_id/match_manual/no/to_thing/2", body: {} },
