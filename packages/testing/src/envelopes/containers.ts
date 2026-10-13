@@ -5,7 +5,7 @@ import { failure, success200 } from "./envelope.js";
 import type { GripReply } from "./reply.js";
 
 export interface ConfigLookupOptions {
-  /** The container's slug, also its `name`. */
+  /** The container's slug. The builder reuses it as `name`; the page records `name` only as "The container name" (`WSAI26` beside the slug `wsai26`), so the equality is a fixture convenience, not a platform fact. */
   slug: string;
   displayName?: string;
   /** `1` while the edition is live, `0` once it has ended. */

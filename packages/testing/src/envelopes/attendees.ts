@@ -23,7 +23,7 @@ export function searchPage200(page: number, options: SearchPageOptions = {}): Gr
   return success200(Array.from({ length: pageSize }, (_unused, index) => ({ id: (page - 1) * pageSize + index + 1 })));
 }
 
-/** docs/api/attendees.md § Gated for a normal attendee token (HTTP 403): `thing N not authorized`. */
+/** docs/api/attendees.md § Gated for a normal attendee token (HTTP 403): `thing N not authorized`. The page does not say what N identifies; the parameter name is the fixture's. */
 export function gatedType403(thingId: number): GripReply {
   return failure(`thing ${String(thingId)} not authorized`, 403);
 }
