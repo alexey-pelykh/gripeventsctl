@@ -35,10 +35,11 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "lint": "eslint src/",
+    "lint": "eslint src/ vitest.config.ts",
     "dev": "tsc --watch"
   },
   "devDependencies": {
+    "@gripeventsctl/testing": "workspace:^",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",

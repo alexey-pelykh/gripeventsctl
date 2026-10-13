@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
+/**
+ * A stub 1Password CLI for the tests: a POSIX shell script named `op`, on a temporary directory
+ * prepended to `PATH`, that records each call (argv, stdin, environment) and answers from the
+ * fragment the test supplies.
+ */
+
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -58,7 +64,7 @@ export async function stubOp(script: string): Promise<OpStub> {
   const body = [
     "#!/bin/sh",
     "# Stub 1Password CLI written by @gripeventsctl/testing stubOp(): records the call, then answers.",
-    `record='${recordDir}'`,
+    `record='${recordDir.replaceAll("'", "'\\''")}'`,
     "i=0",
     'while [ -e "$record/$i.argv" ]; do i=$((i + 1)); done',
     'for arg in "$@"; do printf \'%s\\0\' "$arg"; done > "$record/$i.argv"',

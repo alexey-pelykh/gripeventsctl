@@ -15,7 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "turbo run test:e2e --concurrency=1",
     "test:oracles": "vitest run --config vitest.oracles.config.ts",
-    "test:scripts": "vitest run --dir scripts",
+    "test:scripts": "vitest run --project scripts",
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "typecheck": "turbo run typecheck",
