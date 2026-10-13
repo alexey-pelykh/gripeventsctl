@@ -32,7 +32,10 @@ function homeDirectory(env: NodeJS.ProcessEnv): string {
   return fromEnv === undefined || fromEnv === "" ? homedir() : fromEnv;
 }
 
-/** The config file path for `env` (default `process.env`). Exported so the CLI and the MCP server print the same path. */
+/**
+ * The config file path for `env` (default `process.env`). Exported so the CLI and the MCP server
+ * print the same path.
+ */
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env[CONFIG_FILE_ENV];
   if (override !== undefined && override !== "") return isAbsolute(override) ? override : resolve(override);

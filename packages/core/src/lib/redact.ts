@@ -23,7 +23,11 @@
  * whose shape no pattern knows still never reaches a log. The registry never touches the file
  * system: this module imports no file or process API.
  */
-export const SESSION_TOKEN_PATTERN_SOURCE = String.raw`(user_token|x-authorization)(["']?\s*[:=]\s*["']?)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`;
+/** The bare shape of a session token: a 36-character lowercase UUID. Too common to lint on its own; see `SESSION_TOKEN_PATTERN_SOURCE`. */
+export const UUID_PATTERN_SOURCE = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`;
+
+export const SESSION_TOKEN_PATTERN_SOURCE =
+  String.raw`(user_token|x-authorization)(["']?\s*[:=]\s*["']?)(` + UUID_PATTERN_SOURCE + ")";
 
 export const JWT_PATTERN_SOURCE = String.raw`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`;
 

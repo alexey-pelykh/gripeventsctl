@@ -4,11 +4,14 @@
 /**
  * The config store: `loadConfig()`, `saveConfig()`, the session helpers and the time records.
  *
- * Reads refuse a file that other users of the machine can read (mode bits for group or others set,
- * on POSIX) before the token is read. Writes are atomic and locked: a temporary file beside the
- * target is created exclusively at mode 0600 before any byte is written, then renamed over the
- * target, under a `proper-lockfile` lock shared with every other gripeventsctl process, and an
- * in-process queue so two writers in one process never race for the lock.
+ * Reads refuse a file that other users of the machine can read (mode bits for group or others
+ * set, on POSIX) before the token is read. Writes are atomic and locked: a temporary file beside
+ * the target is created exclusively at mode 0600 before any byte is written, then renamed over
+ * the target, under a `proper-lockfile` lock shared with every other gripeventsctl process, and
+ * an in-process queue so two writers in one process never race for the lock. `saveConfig()`
+ * replaces the file without reading it, so a file that cannot be loaded can still be rewritten
+ * whole; the session helpers read it first, so they keep `auth` and `writes` and refuse a file
+ * they cannot load.
  *
  * The store is reachable through `ConfigStore`, so a later live probe can pass an in-memory store
  * to `saveSession()`, `clearSession()` and `recordAuthFailure()` instead of the file-backed one
@@ -20,7 +23,7 @@ import * as nodeFs from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { lock as lockFile } from "proper-lockfile";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { LineCounter, parseDocument, stringify as stringifyYaml } from "yaml";
 
 import { type Clock, isoSeconds, systemClock } from "../lib/clock.js";
 import { registerSecret } from "../lib/redact.js";
@@ -32,12 +35,23 @@ import { type Config, type Session, emptyConfig, parseConfig, toFileShape, valid
 export const CONFIG_FILE_MODE = 0o600;
 /** Mode bits that grant group or others any permission; a file with one set is refused. */
 const SHARED_MODE_BITS = 0o077;
+/** The file-type bits of an `lstat` mode, and the value of a regular file. */
+const FILE_TYPE_BITS = 0o170000;
+const REGULAR_FILE = 0o100000;
+const SYMBOLIC_LINK = 0o120000;
 
-/** `proper-lockfile` options: `realpath: false` because the locked file may not exist yet. */
+const FIX_OR_DELETE = "fix the config file, or delete it and sign in again";
+
+/**
+ * `proper-lockfile` options: `realpath: false` because the locked file may not exist yet. A
+ * compromised lock (its directory removed while held) is not fatal: the write goes on as if the
+ * lock had been lost, instead of crashing the process from a timer.
+ */
 export const LOCK_OPTIONS = {
   realpath: false,
   stale: 10_000,
   retries: { retries: 5, minTimeout: 200, maxTimeout: 1000 },
+  onCompromised: (): void => undefined,
 } as const;
 
 /** The file handle operations a write uses; `node:fs/promises` `FileHandle` satisfies it. */
@@ -85,11 +99,12 @@ export interface ConfigStore {
   readonly path: string;
   readonly modeEnforced: boolean;
   load(): Promise<LoadResult>;
-  /** Validate, then write atomically under the lock. */
+  /** Validate, then write atomically under the lock, without reading what the file held before. */
   save(config: Config): Promise<void>;
   /**
    * Under the lock: reload, apply `mutate` to the current state, and write the config it returns.
-   * A mutator that returns `undefined` leaves the file untouched.
+   * A mutator that returns `undefined` leaves the file untouched. A file that cannot be loaded is
+   * refused with the `config` kind; `save()` is the way to replace it.
    */
   update(mutate: (current: LoadResult) => Config | undefined): Promise<void>;
 }
@@ -106,6 +121,24 @@ function errorMessage(error: unknown): string {
 
 function octal(mode: number): string {
   return `0${(mode & 0o777).toString(8).padStart(3, "0")}`;
+}
+
+/**
+ * Parse the file's YAML. The message of a failure names the position only: the library's own
+ * pretty message quotes the offending source line, which may be the one holding the token.
+ */
+function parseConfigYaml(text: string, path: string): unknown {
+  const lineCounter = new LineCounter();
+  const document = parseDocument(text, { lineCounter, prettyErrors: false });
+  const failure = document.errors[0];
+  if (failure !== undefined) {
+    const { line, col } = lineCounter.linePos(failure.pos[0]);
+    throw new ConfigError(
+      `cannot parse config file ${path}: ${failure.code} at line ${String(line)}, column ${String(col)}`,
+      FIX_OR_DELETE,
+    );
+  }
+  return document.toJS();
 }
 
 // One queue per path, so concurrent writers in one process take the file lock one after another.
@@ -143,6 +176,16 @@ export function createConfigStore(options: StoreOptions = {}): ConfigStore {
       if (errorCode(error) === "ENOENT") return { config: emptyConfig(), path, exists: false, modeEnforced };
       throw new ConfigError(`cannot read config file ${path}: ${errorMessage(error)}`, "", { cause: error });
     }
+    const fileType = mode & FILE_TYPE_BITS;
+    if (fileType === SYMBOLIC_LINK) {
+      throw new ConfigError(
+        `config file ${path} is a symbolic link; the config must be a regular file`,
+        `point GRIPEVENTSCTL_CONFIG_FILE at the file the link resolves to`,
+      );
+    }
+    if (fileType !== REGULAR_FILE) {
+      throw new ConfigError(`config file ${path} is not a regular file`, FIX_OR_DELETE);
+    }
     if (modeEnforced && (mode & SHARED_MODE_BITS) !== 0) {
       throw new ConfigError(
         `config file ${path} has mode ${octal(mode)}; it must not be readable by other users of this machine`,
@@ -155,17 +198,7 @@ export function createConfigStore(options: StoreOptions = {}): ConfigStore {
     } catch (error: unknown) {
       throw new ConfigError(`cannot read config file ${path}: ${errorMessage(error)}`, "", { cause: error });
     }
-    let data: unknown;
-    try {
-      data = parseYaml(text);
-    } catch (error: unknown) {
-      throw new ConfigError(
-        `cannot parse config file ${path}: ${errorMessage(error)}`,
-        "fix the config file, or sign in again to rewrite it",
-        { cause: error },
-      );
-    }
-    return { config: parseConfig(data, path), path, exists: true, modeEnforced };
+    return { config: parseConfig(parseConfigYaml(text, path), path), path, exists: true, modeEnforced };
   }
 
   async function acquireLock(): Promise<() => Promise<void>> {
@@ -200,7 +233,8 @@ export function createConfigStore(options: StoreOptions = {}): ConfigStore {
     }
   }
 
-  async function update(mutate: (current: LoadResult) => Config | undefined): Promise<void> {
+  /** Take the lock around `task`; a failure to release never masks what `task` threw. */
+  async function locked(task: () => Promise<void>): Promise<void> {
     await serialized(path, async () => {
       try {
         await fs.mkdir(dirname(path), { recursive: true });
@@ -209,11 +243,9 @@ export function createConfigStore(options: StoreOptions = {}): ConfigStore {
       }
       const release = await acquireLock();
       try {
-        const next = mutate(await load());
-        if (next === undefined) return;
-        await writeAtomically(validateConfig(next));
+        await task();
       } finally {
-        await release();
+        await release().catch(() => undefined);
       }
     });
   }
@@ -224,9 +256,15 @@ export function createConfigStore(options: StoreOptions = {}): ConfigStore {
     load,
     async save(config) {
       validateConfig(config);
-      await update(() => config);
+      await locked(() => writeAtomically(config));
     },
-    update,
+    async update(mutate) {
+      await locked(async () => {
+        const next = mutate(await load());
+        if (next === undefined) return;
+        await writeAtomically(validateConfig(next));
+      });
+    },
   };
 }
 
@@ -235,7 +273,7 @@ export function loadConfig(options: StoreOptions = {}): Promise<LoadResult> {
   return createConfigStore(options).load();
 }
 
-/** Validate `config` and write it atomically at mode 0600 under the lock. */
+/** Validate `config` and write it atomically at mode 0600 under the lock, replacing whatever the file held. */
 export function saveConfig(config: Config, options: StoreOptions = {}): Promise<void> {
   return createConfigStore(options).save(config);
 }
@@ -253,7 +291,8 @@ function storeFor(options: SessionOptions): ConfigStore {
 
 /**
  * Store the session the sign-in command captured: `signed_in_at` is set from the clock, any
- * `auth_failed_at` is dropped, any existing session is replaced. `auth` and `writes` are kept.
+ * `auth_failed_at` is dropped, any existing session is replaced. `auth` and `writes` are kept,
+ * so a file that cannot be loaded is refused rather than overwritten.
  */
 export async function saveSession(
   session: Omit<Session, "signed_in_at" | "auth_failed_at">,

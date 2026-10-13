@@ -2,15 +2,16 @@
 // Copyright (C) 2026 Oleksii PELYKH
 
 import * as fs from "node:fs/promises";
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { type TempHome, fixtureSecrets, withTempHome } from "@gripeventsctl/testing";
+import { lock as lockFile } from "proper-lockfile";
 import { describe, expect, it, vi } from "vitest";
 
 import { type Config, emptyConfig } from "../config/schema.js";
-import { CONFIG_FILE_MODE, type StoreFs, loadConfig, saveConfig } from "../config/store.js";
+import { CONFIG_FILE_MODE, LOCK_OPTIONS, type StoreFs, loadConfig, saveConfig, saveSession } from "../config/store.js";
 import { ConfigError } from "../transport/errors.js";
 
 const POSIX = process.platform !== "win32";
@@ -131,14 +132,42 @@ describe("[CAP-CFG] loadConfig()", () => {
     });
   });
 
-  it("refuses a file that is not valid YAML with the config kind, naming the path", async () => {
+  it("refuses a file that is not valid YAML with the config kind, naming the path and the position only", async () => {
     await withTempHome(async (home) => {
-      await writeFile(home.configFile, "version: [1\n", { mode: 0o600 });
+      const token = fixtureSecrets().sessionToken;
+      // The broken line is the one holding the token: an unbalanced quote.
+      await writeFile(home.configFile, `version: 1\nsession:\n  slug: x\n  token: "${token}\n`, { mode: 0o600 });
       const error = await expectConfigError(loadConfig({ env: home.env }));
       expect(error.kind).toBe("config");
       expect(error.message).toContain(`cannot parse config file ${home.configFile}`);
+      expect(error.message).toMatch(/at line \d+, column \d+/);
+      for (const sink of [error.message, String(error), JSON.stringify(error), String(error.cause)]) {
+        expect(sink.split(token).length - 1).toBe(0);
+      }
     });
   });
+
+  it("refuses a directory at the config path", async () => {
+    await withTempHome(async (home) => {
+      await mkdir(home.configFile);
+      const error = await expectConfigError(loadConfig({ env: home.env }));
+      expect(error.message).toContain("not a regular file");
+    });
+  });
+
+  it.skipIf(!POSIX)(
+    "refuses a symbolic link at the config path, with a hint naming the real file (POSIX only: symlinks)",
+    async () => {
+      await withTempHome(async (home) => {
+        const real = join(home.dir, "real.yaml");
+        await writeFile(real, "version: 1\n", { mode: 0o600 });
+        await symlink(real, home.configFile);
+        const error = await expectConfigError(loadConfig({ env: home.env }));
+        expect(error.message).toContain("symbolic link");
+        expect(error.hint).toContain("GRIPEVENTSCTL_CONFIG_FILE");
+      });
+    },
+  );
 
   it("refuses a file that fails the schema, naming the path and the key", async () => {
     await withTempHome(async (home) => {
@@ -176,35 +205,66 @@ describe("[CAP-CFG] saveConfig()", () => {
     });
   });
 
-  it.skipIf(!POSIX)(
-    `leaves the file at mode 0600, created exclusively at that mode before any write${POSIX_ONLY}`,
-    async () => {
-      await withTempHome(async (home) => {
-        const spy = spiedFs();
-        const open = vi.fn(spy.open);
-        await saveConfig(sessionConfig(), { env: home.env, fs: { ...spy, open } });
-        expect((await stat(home.configFile)).mode & 0o777).toBe(CONFIG_FILE_MODE);
-        expect(open).toHaveBeenCalledTimes(1);
-        const [temporary, flags, mode] = open.mock.calls[0] ?? [];
-        expect(temporary).toMatch(
-          new RegExp(`^${home.configFile.replaceAll("\\", "\\\\").replaceAll(".", "\\.")}\\.[0-9a-f]{12}\\.tmp$`),
-        );
-        expect(flags).toBe("wx");
-        expect(mode).toBe(0o600);
-        // The exclusive create comes before the rename that publishes the file; no chmod is involved.
-        expect(spy.calls.indexOf("open")).toBeLessThan(spy.calls.indexOf("rename"));
-        expect(spy.calls).not.toContain("chmod");
-      });
-    },
-  );
-
-  it("rewrites an existing file at mode 0600 whatever mode it had", async () => {
+  it.skipIf(!POSIX)(`leaves the file at mode 0600${POSIX_ONLY}`, async () => {
     await withTempHome(async (home) => {
-      await writeFile(home.configFile, "version: 1\n", { mode: 0o600 });
+      await saveConfig(sessionConfig(), { env: home.env });
+      expect((await stat(home.configFile)).mode & 0o777).toBe(CONFIG_FILE_MODE);
+    });
+  });
+
+  it("creates the temporary file exclusively at mode 0600 before any write, then renames it", async () => {
+    await withTempHome(async (home) => {
+      const spy = spiedFs();
+      const open = vi.fn(spy.open);
+      await saveConfig(sessionConfig(), { env: home.env, fs: { ...spy, open } });
+      expect(open).toHaveBeenCalledTimes(1);
+      const [temporary, flags, mode] = open.mock.calls[0] ?? [];
+      expect(temporary).toMatch(
+        new RegExp(`^${home.configFile.replaceAll("\\", "\\\\").replaceAll(".", "\\.")}\\.[0-9a-f]{12}\\.tmp$`),
+      );
+      expect(flags).toBe("wx");
+      expect(mode).toBe(0o600);
+      // The exclusive create comes before the rename that publishes the file; the store never
+      // reads the file it replaces, and the only mode it sets is the one the create carries.
+      expect(spy.calls).toEqual(["mkdir", "open", "rename"]);
+    });
+  });
+
+  it("replaces an existing file whatever its mode or content, leaving it at mode 0600", async () => {
+    await withTempHome(async (home) => {
+      await writeFile(home.configFile, "version: [1\n", { mode: POSIX ? 0o644 : 0o600 });
+      await expectConfigError(loadConfig({ env: home.env }));
       const config = sessionConfig();
       await saveConfig(config, { env: home.env });
       expect((await loadConfig({ env: home.env })).config).toEqual(config);
       if (POSIX) expect((await stat(home.configFile)).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("takes the cross-process lock on the config path with the specified options", async () => {
+    await withTempHome(async (home) => {
+      const lock = vi.fn(lockFile);
+      await saveConfig(sessionConfig(), { env: home.env, lock });
+      expect(lock).toHaveBeenCalledTimes(1);
+      expect(lock).toHaveBeenCalledWith(home.configFile, LOCK_OPTIONS);
+      expect(LOCK_OPTIONS).toMatchObject({
+        realpath: false,
+        stale: 10_000,
+        retries: { retries: 5, minTimeout: 200, maxTimeout: 1000 },
+      });
+    });
+  });
+
+  it("saveSession() refuses a file it cannot load, so auth and writes are never dropped silently", async () => {
+    await withTempHome(async (home) => {
+      await writeFile(home.configFile, "version: [1\n", { mode: 0o600 });
+      const before = await readFile(home.configFile);
+      const error = await expectConfigError(
+        saveSession({ slug: "testevent1", container_id: 1, token: fixtureSecrets().sessionToken }, { env: home.env }),
+      );
+      expect(error.kind).toBe("config");
+      expect(error.hint).toContain("delete it and sign in again");
+      expect(await readFile(home.configFile)).toEqual(before);
     });
   });
 
