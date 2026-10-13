@@ -6,7 +6,7 @@ GripEventsCtl is an unofficial CLI and MCP server for Grip-hosted event apps (`a
 
 State on 2026-10-12: a pnpm workspace scaffold. The binary answers `--version` and `--help`, and `gripeventsctl mcp` starts an MCP server with no tools. The commands in README § Planned surface do not exist yet. Nothing is published to npm.
 
-Packages: `packages/core` (`@gripeventsctl/core`: client, session, redaction), `packages/cli` (`@gripeventsctl/cli`: the Commander program), `packages/mcp` (`@gripeventsctl/mcp`: the MCP server), `packages/gripeventsctl` (the umbrella with the binary; depends on cli and mcp) and `packages/e2e` (private; live tests). cli and mcp depend on core. Nothing depends on the umbrella or on e2e.
+Packages: `packages/core` (`@gripeventsctl/core`: client, session, redaction), `packages/cli` (`@gripeventsctl/cli`: the Commander program), `packages/mcp` (`@gripeventsctl/mcp`: the MCP server), `packages/gripeventsctl` (the umbrella with the binary; depends on cli and mcp), `packages/e2e` (private; live tests) and `packages/testing` (`@gripeventsctl/testing`: private test helpers and the temporary-home test guard; depends on no workspace package and sits in `devDependencies` only). cli and mcp depend on core. Nothing depends on the umbrella, on e2e or on testing at run time.
 
 ## Conventions
 
