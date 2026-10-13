@@ -178,7 +178,7 @@ pnpm license-check     # check dependency licenses
 pnpm dev               # watch mode
 ```
 
-The packages are `@gripeventsctl/core`, `@gripeventsctl/cli`, `@gripeventsctl/mcp`, the umbrella `gripeventsctl` and the private `@gripeventsctl/e2e`. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
+The packages are `@gripeventsctl/core`, `@gripeventsctl/cli`, `@gripeventsctl/mcp`, the umbrella `gripeventsctl` and the private `@gripeventsctl/e2e` and `@gripeventsctl/testing`. See [CONTRIBUTING.md](CONTRIBUTING.md) before you open a pull request.
 
 ## Documentation
 

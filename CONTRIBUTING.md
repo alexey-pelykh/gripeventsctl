@@ -94,6 +94,7 @@ The repository is a pnpm monorepo with the following packages:
 | `packages/mcp`           | MCP server (`@gripeventsctl/mcp`)                                 |
 | `packages/gripeventsctl` | Umbrella package with the binary (`gripeventsctl`)                |
 | `packages/e2e`           | Private e2e tests (`@gripeventsctl/e2e`)                          |
+| `packages/testing`       | Private test helpers (`@gripeventsctl/testing`)                   |
 
 ### Conventions
 
