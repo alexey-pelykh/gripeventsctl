@@ -72,6 +72,17 @@ item the oracles describe. A pull request that implements the code never edits a
 diff on `*.oracle.test.ts` is empty, or it links the specification change that moved the assertion
 first. A change to an oracle file is a specification change and is reviewed as one.
 
+Two checks in CI make these rules mechanical. The `Oracles` job fails a pull request that touches a
+`*.oracle.test.ts` file unless the pull request carries the `spec-change` label; a maintainer adds
+the label once the specification change has been reviewed. The same job runs `pnpm check-oracles`,
+which runs the oracle files in strict mode and grades each one against the pending ledger
+[`oracles.pending`](oracles.pending) at the repository root. The ledger lists, one path per line and
+sorted, every oracle file whose subject module is not built yet. A listed file may fail only because
+its subject is missing. A file not listed must pass. A listed file whose cases pass fails the check
+and is named: the pull request that built its subject removes its line from the ledger in the same
+change. A ledger line that names a file that does not exist fails too. The check prints one line
+per oracle file with its state. The release workflow runs the same check before publishing.
+
 ### Project Structure
 
 The repository is a pnpm monorepo with the following packages:
@@ -119,7 +130,7 @@ The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has five gates. An
 2. **Writes stay gated**: a call that notifies someone or changes something on the platform runs only behind the safe-mode gate, honours `--dry-run`, and appends to the send log.
 3. **Live verification**: a new or changed request shape against `api-prod.grip.events` needs the matching page under `docs/api/` to carry the date it was verified live. The test plan names the e2e test or transcript.
 4. **No secrets**: no session token, chat token, password or captured response with personal data goes into a committed file or fixture. `pnpm check-secret-leakage` checks this.
-5. **Oracles untouched**: a pull request that implements an item with pre-authored `*.oracle.test.ts` files leaves those files unchanged, or links the specification change that moved the assertion first. `pnpm test:oracles` is green for the item's files.
+5. **Oracles untouched**: a pull request that implements an item with pre-authored `*.oracle.test.ts` files leaves those files unchanged, or links the specification change that moved the assertion first and carries the `spec-change` label. It removes the item's files from [`oracles.pending`](oracles.pending), and `pnpm check-oracles` is green.
 
 ### Branch protection
 
