@@ -453,7 +453,15 @@ export class GripClient {
     return new NetworkError(`${line}: the request failed: ${detail}`, { cause: error });
   }
 
-  /** The classification table, in its order; raises exactly one error class or returns `data`. */
+  /**
+   * The classification table; raises exactly one error class or returns `data`. In order: a body over
+   * the cap and a 3xx are `api`; a 403 whose body is not JSON is `load-balancer-rejected`; a JSON 403
+   * on a directory search with `not authorized` is `gated-type`; a 401 is `auth-failed` whatever its
+   * body; the two reasons the app matches on are `swipe-cap` and `mode-phase` on every other status, a
+   * JSON 403 included; any other JSON 403 is `api`; a 409 with an `error.data` array is `conflict`;
+   * the documented 404 on the lookup is `unknown-slug`; a 2xx `success: true` returns `data`; the rest
+   * is `api`.
+   */
   async #classify(spec: RequestSpec, answer: Answer): Promise<Classified> {
     const { status, text } = answer;
     const line = describe(spec);
@@ -495,8 +503,6 @@ export class GripClient {
           },
         );
       }
-      const detail = reason ?? text;
-      throw new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: detail });
     }
 
     if (status === 401) {
@@ -520,11 +526,19 @@ export class GripClient {
       throw new AuthFailedError(`${message}; the session was rejected`, { status, bodyExcerpt: detail });
     }
 
+    // The two reasons the app matches on decide the kind on every status but 401, a JSON 403 included:
+    // the pages record the body text only ("none seen live"), and the write items stop on `swipe-cap`.
     if (reason === SWIPE_CAP_REASON) {
       throw new SwipeCapError(`${line}: ${reason}`, { status, bodyExcerpt: reason });
     }
     if (reason === MODE_PHASE_REASON) {
       throw new ModePhaseError(`${line}: ${reason}`, { status, bodyExcerpt: reason });
+    }
+
+    if (status === 403) {
+      // Any other JSON 403 is the `api` kind: not an authentication failure.
+      const detail = reason ?? text;
+      throw new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: detail });
     }
 
     if (status === 409) {
