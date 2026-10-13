@@ -38,7 +38,13 @@ export async function describeStart(env?: NodeJS.ProcessEnv): Promise<string> {
   try {
     return startLine(await loadConfig(options));
   } catch (error: unknown) {
-    return startLine({ path: configPath(env), error });
+    let path = "<unresolved>";
+    try {
+      path = configPath(env);
+    } catch {
+      // The home directory itself cannot be resolved; the line still names the error.
+    }
+    return startLine({ path, error });
   }
 }
 

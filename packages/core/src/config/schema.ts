@@ -145,7 +145,7 @@ export function parseConfig(data: unknown, source?: string): Config {
     const problems = result.error.issues.map((issue) => describeIssue(issue, data)).join("; ");
     throw new ConfigError(
       `${prefix}invalid config: ${problems}`,
-      "fix the config file, or sign in again to rewrite it",
+      "fix the config file, or delete it and sign in again",
     );
   }
   const parsed = result.data;

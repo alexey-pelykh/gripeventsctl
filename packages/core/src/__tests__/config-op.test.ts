@@ -23,7 +23,7 @@ import {
 } from "../config/op.js";
 import type { Config } from "../config/schema.js";
 import { resolveSessionToken } from "../config/store.js";
-import { REDACTED, redactString } from "../lib/redact.js";
+import { REDACTED, redactString, registerSecret } from "../lib/redact.js";
 import { ConfigError } from "../transport/errors.js";
 
 const POSIX_ONLY = " (POSIX only: the stub op is a shell script)";
@@ -117,6 +117,15 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
     expect(() => opItemGetArgs("op://Vault/Item/field")).toThrow(ConfigError);
   });
 
+  it("refuses an item, a vault or a label that op would read as a flag", () => {
+    expect(() => opItemGetArgs("op://Vault/--help")).toThrow(/must not start with "-"/);
+    expect(() => opItemGetArgs("op://-v/Item")).toThrow(ConfigError);
+    expect(() => opItemEditArgs("op://Vault/Item", { "-x": "v" })).toThrow(ConfigError);
+    expect(() => opItemGetArgs("op://Vault/Item", { fields: ["--all"] })).toThrow(ConfigError);
+    // A leading dash in a value is harmless: the argv element starts with the label.
+    expect(opItemEditArgs("op://Vault/Item", { token: "-starts-with-dash" })).toContain("token=-starts-with-dash");
+  });
+
   it("passes only OP_*, PATH and the platform minimum to the child", () => {
     const env = {
       OP_SERVICE_ACCOUNT_TOKEN: "service-account",
@@ -125,6 +134,8 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
       HOME: "/home/test",
       LANG: "C.UTF-8",
       LC_ALL: "C",
+      SystemRoot: "C:\\Windows",
+      op_lowercase: "must not pass",
       GRIPEVENTSCTL_PROBE: "must not pass",
       AWS_SECRET_ACCESS_KEY: "must not pass",
       SSH_AUTH_SOCK: "must not pass",
@@ -136,6 +147,7 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
       HOME: "/home/test",
       LANG: "C.UTF-8",
       LC_ALL: "C",
+      SystemRoot: "C:\\Windows",
     });
   });
 
@@ -203,19 +215,24 @@ describe("[CAP-CFG] resolveSessionToken() through the 1Password CLI", () => {
 
   it.skipIf(!STUB_OP_SUPPORTED)(`redacts op's stderr in the error when op fails${POSIX_ONLY}`, async () => {
     const secrets = fixtureSecrets();
-    // The registered live value: the token this process already handled.
-    await resolveSessionToken(sessionWith(secrets.sessionToken));
     const other = fixtureSecrets().sessionToken;
-    const stub = await stubOp(`printf '%s\\n' 'failed: ${secrets.sessionToken} user_token: ${other}' >&2; exit 1`);
+    // A registered live value of another shape, as the auth item will register the password.
+    const registered = `reg-${secrets.password}`;
+    registerSecret(registered);
+    const stub = await stubOp(
+      `printf '%s\\n' 'failed: ${secrets.sessionToken} user_token: ${other} ${registered} ${secrets.chatToken}' >&2; exit 1`,
+    );
     try {
       const error = await expectConfigError(
         resolveSessionToken(sessionWith("op://Vault/Item/token"), { env: process.env }),
       );
       expect(error.kind).toBe("config");
       expect(error.message).toContain(REDACTED);
-      expect(occurrences(error.message, secrets.sessionToken)).toBe(0);
-      expect(occurrences(error.message, other)).toBe(0);
+      for (const value of [secrets.sessionToken, other, registered, secrets.chatToken]) {
+        expect(occurrences(error.message, value)).toBe(0);
+      }
       expect(error.message).toContain("exit 1");
+      expect(error.message).toContain("failed:");
     } finally {
       await stub.remove();
     }

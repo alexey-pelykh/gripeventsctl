@@ -65,9 +65,9 @@ describe("[CAP-REDACT] the live-secret registry", () => {
 
   it("performs no file-system call: the module imports no file or process API, and a run leaves the temporary home empty", async () => {
     const source = await readFile(REDACT_SOURCE, "utf8");
-    const imported = [...source.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1]);
+    const imported = [...source.matchAll(/(?:from\s+|import\s*\(\s*)["']([^"']+)["']/g)].map((match) => match[1]);
     expect(imported.filter((name) => /^(node:)?(fs|fs\/promises|child_process|os|path)$/.test(name ?? ""))).toEqual([]);
-    expect(source).not.toMatch(/\brequire\s*\(/);
+    expect(source).not.toMatch(/\brequire\s*\(|createRequire|process\.binding|process\.dlopen/);
     await withTempHome(async (home) => {
       for (let i = 0; i < 50; i += 1) {
         const secrets = fixtureSecrets();

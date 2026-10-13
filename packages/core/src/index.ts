@@ -6,6 +6,7 @@ export {
   REDACTED,
   SECRET_PATTERN_SOURCES,
   SESSION_TOKEN_PATTERN_SOURCE,
+  UUID_PATTERN_SOURCE,
   redactString,
   registerSecret,
 } from "./lib/redact.js";
@@ -15,7 +16,6 @@ export {
   CONFIG_VERSION,
   type Config,
   type Session,
-  configSchema,
   emptyConfig,
   parseConfig,
   validateConfig,

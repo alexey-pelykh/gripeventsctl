@@ -47,6 +47,10 @@ async function runServer(home: TempHome): Promise<Run> {
   try {
     // The server has no tools yet, so the round trip after the handshake is a ping.
     await client.ping();
+    // stderr and stdout are separate pipes: give the start line a moment to arrive after the reply.
+    for (let waited = 0; !stderr.includes("\n") && waited < 5000; waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     return {
       stderrLines: stderr.split(/\r?\n/).filter((line) => line !== ""),
       errors,

@@ -18,7 +18,7 @@ import {
   execFile as nodeExecFile,
 } from "node:child_process";
 
-import { redactString, registerSecret } from "../lib/redact.js";
+import { REDACTED, UUID_PATTERN_SOURCE, redactString, registerSecret } from "../lib/redact.js";
 import { ConfigError } from "../transport/errors.js";
 
 /** The characters one segment of an `op://` reference, a field label or a field value may hold. */
@@ -30,7 +30,10 @@ const REFERENCE = new RegExp(
 
 export const OP_REFERENCE_PREFIX = "op://";
 
-/** A parsed `op://` reference: `op://<vault>/<item>` names an item, `op://<vault>/<item>[/<section>]/<field>` a field. */
+/**
+ * A parsed `op://` reference: `op://<vault>/<item>` names an item,
+ * `op://<vault>/<item>[/<section>]/<field>` a field.
+ */
 export interface OpReference {
   reference: string;
   kind: "item" | "field";
@@ -85,13 +88,16 @@ const PLATFORM_MINIMUM_ENV = new Set(["PATH", "HOME", "USERPROFILE", "SYSTEMROOT
  * The environment an `op` child inherits: the `OP_*` variables of `env` (the service account
  * token, the Connect host, the session variables, whatever 1Password reads), `PATH`, and the
  * platform's minimum (`HOME`, `USERPROFILE`, `SYSTEMROOT`, `TMPDIR`, `LANG`, `LC_*`). Nothing else.
+ * The `OP_` and `LC_` prefixes match as written; the platform names match in any letter case,
+ * because Windows spells them `Path` and `SystemRoot`.
  */
 export function opEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
   const child: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined) continue;
-    const upper = name.toUpperCase();
-    if (upper.startsWith("OP_") || upper.startsWith("LC_") || PLATFORM_MINIMUM_ENV.has(upper)) child[name] = value;
+    if (name.startsWith("OP_") || name.startsWith("LC_") || PLATFORM_MINIMUM_ENV.has(name.toUpperCase())) {
+      child[name] = value;
+    }
   }
   return child;
 }
@@ -108,7 +114,15 @@ function validateLabel(label: string, what: string): string {
       `invalid 1Password ${what} ${JSON.stringify(label)}: letters, digits, space, "-", "_" and "." only`,
     );
   }
-  return label;
+  return positional(label, what);
+}
+
+/** A value that `op` reads as a positional argument or an assignment must not look like a flag. */
+function positional(value: string, what: string): string {
+  if (value.startsWith("-")) {
+    throw new ConfigError(`invalid 1Password ${what} ${JSON.stringify(value)}: it must not start with "-"`);
+  }
+  return value;
 }
 
 /**
@@ -117,7 +131,8 @@ function validateLabel(label: string, what: string): string {
  */
 export function opItemGetArgs(reference: string, options: { fields?: readonly string[] } = {}): string[] {
   const parsed = validateOpReference(reference, "item");
-  const args = ["item", "get", parsed.item, "--vault", parsed.vault, "--format", "json"];
+  const args = ["item", "get", positional(parsed.item, "item"), "--vault", positional(parsed.vault, "vault")];
+  args.push("--format", "json");
   if (options.fields !== undefined && options.fields.length > 0) {
     args.push("--fields", options.fields.map((field) => `label=${validateLabel(field, "field label")}`).join(","));
   }
@@ -130,7 +145,7 @@ export function opItemGetArgs(reference: string, options: { fields?: readonly st
  */
 export function opItemEditArgs(reference: string, assignments: Readonly<Record<string, string>>): string[] {
   const parsed = validateOpReference(reference, "item");
-  const args = ["item", "edit", parsed.item, "--vault", parsed.vault];
+  const args = ["item", "edit", positional(parsed.item, "item"), "--vault", positional(parsed.vault, "vault")];
   for (const [field, value] of Object.entries(assignments)) {
     args.push(`${validateLabel(field, "field label")}=${value}`);
   }
@@ -150,6 +165,15 @@ export interface OpReadOptions {
 }
 
 export const OP_NOT_FOUND_MESSAGE = "1Password CLI (`op`) not found on PATH";
+
+/**
+ * `op`'s stderr, with every secret shape, every registered value and every bare UUID replaced:
+ * a diagnostic from a secrets manager may echo the very value it failed to read, and a session
+ * token is a bare UUID with no context for the pattern rules to key on.
+ */
+export function redactOpStderr(text: string): string {
+  return redactString(text).replace(new RegExp(UUID_PATTERN_SOURCE, "gi"), REDACTED);
+}
 
 function stripTrailingNewline(text: string): string {
   if (text.endsWith("\r\n")) return text.slice(0, -2);
@@ -193,7 +217,7 @@ export async function opRead(
       );
     }
     const exit = typeof result.error.code === "number" ? ` (exit ${String(result.error.code)})` : "";
-    const detail = redactString(result.stderr.trim());
+    const detail = redactOpStderr(result.stderr.trim());
     throw new ConfigError(
       `1Password CLI failed to read ${reference}${exit}${detail === "" ? "" : `: ${detail}`}`,
       "check the reference and that the 1Password CLI is signed in (`op signin`)",
