@@ -218,6 +218,9 @@ const TOOLS: Record<ToolKey, WriteTool> = {
     tool: "gripeventsctl_interest_skip",
     message: "none",
     statusRead: true,
+    // (value open: OQ-6 — docs/api/interest.md § The answers says the no answer is from the app code and not verified
+    // as a POST; the gated-writes item ships interest skip only after a recorded live no; amend this path or verb if
+    // the live run shows another)
     postPath: (c, t) => `container/${String(c)}/thing/user_id/match_manual/no/to_thing/${String(t)}`,
     body: () => ({}),
   },
