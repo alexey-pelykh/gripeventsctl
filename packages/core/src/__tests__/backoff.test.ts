@@ -20,8 +20,10 @@ describe("[CAP-THROTTLE] the schedule constants and the Retry-After forms (docs/
     expect(backoffWaitS(2, " 42 ")).toBe(42);
   });
 
-  it("falls back to the attempt's schedule step for an HTTP-date, zero, a negative or an unparseable value", () => {
-    expect(backoffWaitS(1, "Wed, 21 Oct 2026 07:28:00 GMT")).toBe(60);
+  it("falls back to the attempt's schedule step for zero, a negative, an unparseable value, or a date at or before now", () => {
+    const now = new Date("2026-10-21T07:28:00Z");
+    expect(backoffWaitS(1, "Wed, 21 Oct 2026 07:28:00 GMT", now)).toBe(60);
+    expect(backoffWaitS(1, "Wed, 21 Oct 2026 07:27:59 GMT", now)).toBe(60);
     expect(backoffWaitS(2, "0")).toBe(120);
     expect(backoffWaitS(3, "-5")).toBe(240);
     expect(backoffWaitS(1, "soon")).toBe(60);
@@ -29,6 +31,19 @@ describe("[CAP-THROTTLE] the schedule constants and the Retry-After forms (docs/
     expect(backoffWaitS(1, "")).toBe(60);
     expect(backoffWaitS(1, null)).toBe(60);
     expect(backoffWaitS(1)).toBe(60);
+  });
+
+  it("takes an HTTP-date Retry-After as the whole seconds until that date on the given clock, rounded up and capped at 300 s", () => {
+    // RFC 9110 § 10.2.3 allows delta-seconds and an HTTP-date; the issue's rule names no form.
+    const now = new Date("2026-10-12T12:00:00Z");
+    expect(backoffWaitS(1, "Mon, 12 Oct 2026 12:00:07 GMT", now)).toBe(7);
+    expect(backoffWaitS(3, "Mon, 12 Oct 2026 12:00:07 GMT", now)).toBe(7);
+    expect(backoffWaitS(1, "Mon, 12 Oct 2026 12:15:00 GMT", now)).toBe(300);
+    expect(backoffWaitS(1, "Mon, 12 Oct 2026 12:05:00 GMT", now)).toBe(300);
+    // The obsolete RFC 850 form is a date `Date.parse` understands too.
+    expect(backoffWaitS(1, "Monday, 12-Oct-26 12:00:07 GMT", now)).toBe(7);
+    // A fraction of a second rounds up, so the retry never leaves before the date.
+    expect(parseRetryAfter("Mon, 12 Oct 2026 12:00:07 GMT", new Date("2026-10-12T12:00:00.500Z"))).toBe(7);
   });
 
   it("ends after the third retry whatever the header says, and knows no attempt outside 1 to 3", () => {
@@ -39,11 +54,15 @@ describe("[CAP-THROTTLE] the schedule constants and the Retry-After forms (docs/
     expect(backoffWaitS(1.5, null)).toBeUndefined();
   });
 
-  it("parseRetryAfter reads delta-seconds only", () => {
+  it("parseRetryAfter reads delta-seconds and the HTTP-date form, and nothing else", () => {
+    const now = new Date("2026-10-21T07:27:53Z");
     expect(parseRetryAfter("7")).toBe(7);
     expect(parseRetryAfter("0")).toBeUndefined();
     expect(parseRetryAfter("-1")).toBeUndefined();
-    expect(parseRetryAfter("Wed, 21 Oct 2026 07:28:00 GMT")).toBeUndefined();
+    expect(parseRetryAfter("Wed, 21 Oct 2026 07:28:00 GMT", now)).toBe(7);
+    expect(parseRetryAfter("Wed, 21 Oct 2026 07:27:53 GMT", now)).toBeUndefined();
+    expect(parseRetryAfter("Wed, 21 Oct 2026 07:00:00 GMT", now)).toBeUndefined();
+    expect(parseRetryAfter("soon", now)).toBeUndefined();
     expect(parseRetryAfter(undefined)).toBeUndefined();
     expect(parseRetryAfter(null)).toBeUndefined();
   });
