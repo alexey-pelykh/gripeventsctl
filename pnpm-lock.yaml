@@ -315,6 +315,9 @@ importers:
         specifier: 'catalog:'
         version: 4.6.6
     devDependencies:
+      '@gripeventsctl/testing':
+        specifier: workspace:^
+        version: link:../testing
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -368,6 +371,12 @@ importers:
         specifier: workspace:^
         version: link:../mcp
     devDependencies:
+      '@gripeventsctl/testing':
+        specifier: workspace:^
+        version: link:../testing
+      '@modelcontextprotocol/sdk':
+        specifier: 'catalog:'
+        version: 1.32.1(zod@4.6.6)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -395,6 +404,21 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.6.6
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.5
+      eslint:
+        specifier: 'catalog:'
+        version: 10.12.0
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.3(@types/node@26.6.5)(@vitest/coverage-v8@5.0.3)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  packages/testing:
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
