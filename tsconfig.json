@@ -5,6 +5,7 @@
     { "path": "packages/cli" },
     { "path": "packages/mcp" },
     { "path": "packages/gripeventsctl" },
-    { "path": "packages/e2e" }
+    { "path": "packages/e2e" },
+    { "path": "packages/testing" }
   ]
 }

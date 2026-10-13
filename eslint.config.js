@@ -25,7 +25,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["**/*.test.ts", "**/*.e2e.test.ts"],
+    files: ["**/*.test.ts", "**/*.e2e.test.ts", "**/__tests__/workers/**/*.ts"],
     ...tseslint.configs.disableTypeChecked,
   },
   {
