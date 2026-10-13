@@ -95,9 +95,30 @@ interface GateModule {
   };
 }
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 // Oracle subjects: packages/core/src/gate/send-log.ts and gate/gate.ts (not built yet when this file was written).
-const sendLog = (await import("../gate/send-log.js").catch(() => undefined)) as SendLogModule | undefined;
-const gate = (await import("../gate/gate.js").catch(() => undefined)) as GateModule | undefined;
+const sendLog = (await importSubject("../gate/send-log.js")) as SendLogModule | undefined;
+const gate = (await importSubject("../gate/gate.js")) as GateModule | undefined;
 const missing = [
   ...(sendLog === undefined ? ["packages/core/src/gate/send-log.ts"] : []),
   ...(gate === undefined ? ["packages/core/src/gate/gate.ts"] : []),
