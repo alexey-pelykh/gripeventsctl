@@ -170,6 +170,12 @@ interface SurfaceCase {
   arm: (pool: MockPoolLike, marker: string, secrets: FixtureSecrets) => void;
   /** The documented keys of one output record, where the operation's item fixes them. */
   recordKeys?: readonly string[];
+  /**
+   * True where the operation's item keeps unknown keys of the record (the attendees item's loose
+   * directory entry): the planted key may pass through, so the case plants the registered session
+   * token as its value and grades only that the value reaches no output form.
+   */
+  extraKeyPassesThrough?: boolean;
   /** Picks the records out of the parsed CLI `--json` output. */
   records?: (json: unknown) => unknown[];
 }
@@ -384,15 +390,18 @@ describe.skipIf(subject === undefined)(
           cliArgs: ["attendees", "list", "--type", "1", "--page", "1"],
           tool: "gripeventsctl_attendees_list",
           toolArgs: { type_ids: [1], page: 1 },
-          arm: (p, marker) => {
+          arm: (p, _marker, s) => {
             // docs/api/attendees.md § Directory search: one page of entries, each with the thing id in `id`;
-            // the page records no other field name.
-            const answer = envelope([{ id: 1, name: "Test Person 1", token: marker }]);
+            // the page records no other field name. The attendees item keeps unknown keys of the entry, so
+            // the planted key may pass through; the planted value is the registered session token, which
+            // redaction removes from every form.
+            const answer = envelope([{ id: 1, name: "Test Person 1", token: s.sessionToken }]);
             p.intercept({
               path: (path) => path.startsWith("/1/container/1/search/?") && queryOf(path).get("page") === "1",
               method: "GET",
             }).reply(200, answer, { headers: JSON_HEADERS });
           },
+          extraKeyPassesThrough: true,
         },
         {
           id: "S24",
@@ -575,7 +584,7 @@ describe.skipIf(subject === undefined)(
       for (const surfaceCase of projectionCases) {
         const registered = registeredTools.includes(surfaceCase.tool);
         it.skipIf(!registered)(
-          `${surfaceCase.id}: an extra token field in the ${surfaceCase.title} answer is absent from every output form and the read succeeds (skips until the operation is registered)`,
+          `${surfaceCase.id}: an extra token field in the ${surfaceCase.title} answer reaches no output form by value, nor by key where the item projects the record, and the read succeeds (skips until the operation is registered)`,
           async () => {
             const marker = `not-a-secret-marker-${surfaceCase.id}`;
             const outDir = join(home, `out-${surfaceCase.id}`);
@@ -607,7 +616,8 @@ describe.skipIf(subject === undefined)(
             expect(result.structuredContent).toBeDefined();
             expect(hasKeyDeep(result.structuredContent, "error")).toBe(false);
 
-            // The extra field is absent, by key and by value, from every output form and from stderr.
+            // The extra field's value is absent from every output form and from stderr; its key too, where the
+            // operation's item projects the record.
             const text = result.content.map((block) => block.text ?? "").join("\n");
             for (const [form, body] of Object.entries({
               "CLI human stdout": human.stdout,
@@ -621,9 +631,11 @@ describe.skipIf(subject === undefined)(
               expect(occurrences(body, secrets.applicationToken), `${form} holds the application token`).toBe(0);
               expect(occurrences(body, secrets.sessionToken), `${form} holds the session token`).toBe(0);
             }
-            expect(hasKeyDeep(json, "token")).toBe(false);
-            expect(hasKeyDeep(result.structuredContent, "token")).toBe(false);
-            expect(text).not.toContain("token");
+            if (surfaceCase.extraKeyPassesThrough !== true) {
+              expect(hasKeyDeep(json, "token")).toBe(false);
+              expect(hasKeyDeep(result.structuredContent, "token")).toBe(false);
+              expect(text).not.toContain("token");
+            }
 
             // Where the operation's item fixes the record's keys, the projection carries exactly those keys.
             if (surfaceCase.recordKeys !== undefined && surfaceCase.records !== undefined) {
