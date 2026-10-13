@@ -126,13 +126,34 @@ interface SendLogLine {
   message_id: number | null;
 }
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 // Oracle subjects: packages/core/src/operations/interest/show.ts, interest/skip.ts and chat/send.ts
 // (not built yet when this file was written), reached through the real server's tool list, plus the
 // shared test package of the test helpers item. `interest skip` may be held out of the registry
 // until its `no` POST is verified live (#17 § interest skip); its cases skip, with the reason in
 // their titles, while its tool is absent.
-const mcpEntry = (await import("@gripeventsctl/mcp").catch(() => undefined)) as Partial<McpModule> | undefined;
-const testing = (await import("@gripeventsctl/testing").catch(() => undefined)) as Partial<TestingModule> | undefined;
+const mcpEntry = (await importSubject("@gripeventsctl/mcp")) as Partial<McpModule> | undefined;
+const testing = (await importSubject("@gripeventsctl/testing")) as Partial<TestingModule> | undefined;
 const SHOW_TOOL = "gripeventsctl_interest_show";
 const SKIP_TOOL = "gripeventsctl_interest_skip";
 const CHAT_TOOL = "gripeventsctl_chat_send";

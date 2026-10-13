@@ -131,18 +131,38 @@ interface CoreModule {
   OPERATIONS: readonly OperationLike[];
 }
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 // Oracle subjects: packages/core/src/gate/gate.ts (reached through the built core, as the CLI and the
 // MCP server reach it) and the shared test package (not built yet when this file was written).
-const core = (await import(new URL("../../../core/dist/index.js", import.meta.url).href).catch(() => undefined)) as
+const core = (await importSubject(new URL("../../../core/dist/index.js", import.meta.url).href)) as
   Partial<CoreModule> | undefined;
-const mcpEntry = (await import("@gripeventsctl/mcp").catch(() => undefined)) as McpModule | undefined;
-const testing = (await import("@gripeventsctl/testing").catch(() => undefined)) as TestingModule | undefined;
+const mcpEntry = (await importSubject("@gripeventsctl/mcp")) as McpModule | undefined;
+const testing = (await importSubject("@gripeventsctl/testing")) as TestingModule | undefined;
 // zod, resolved where the core package resolves it, so the stand-ins share the builders' zod.
 const requireFromCore = createRequire(new URL("../../../core/package.json", import.meta.url));
-const zod = (await (async () => {
-  const entry = join(dirname(requireFromCore.resolve("zod/package.json")), "index.js");
-  return (await import(pathToFileURL(entry).href)) as { z: ZodApi };
-})().catch(() => undefined)) as { z: ZodApi } | undefined;
+const zod = (await importSubject(
+  pathToFileURL(join(dirname(requireFromCore.resolve("zod/package.json")), "index.js")).href,
+)) as { z: ZodApi } | undefined;
 const missing = [
   ...(typeof core?.createWriteGate !== "function" ? ["packages/core/src/gate/gate.ts"] : []),
   ...(testing === undefined ? ["packages/testing/src/index.ts"] : []),

@@ -58,16 +58,37 @@ interface GripErrorShape {
   cause?: unknown;
 }
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 // Oracle subjects: packages/core/src/lib/redact.ts, which exists but gains `registerSecret` and
 // `RUNTIME_ONLY_PATTERN_SOURCES` from the transport item, and transport/client.ts (not built yet when this file was written).
-const redactModule = (await import("../lib/redact.js").catch(() => undefined)) as Partial<RedactModule> | undefined;
+const redactModule = (await importSubject("../lib/redact.js")) as Partial<RedactModule> | undefined;
 const redact =
   redactModule !== undefined &&
   typeof redactModule.registerSecret === "function" &&
   Array.isArray(redactModule.RUNTIME_ONLY_PATTERN_SOURCES)
     ? (redactModule as RedactModule)
     : undefined;
-const client = (await import("../transport/client.js").catch(() => undefined)) as ClientModule | undefined;
+const client = (await importSubject("../transport/client.js")) as ClientModule | undefined;
 const missing = [
   ...(redact === undefined ? ["packages/core/src/lib/redact.ts (registerSecret, RUNTIME_ONLY_PATTERN_SOURCES)"] : []),
   ...(client === undefined ? ["packages/core/src/transport/client.ts"] : []),

@@ -99,11 +99,32 @@ interface ClientModule {
   };
 }
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 // Oracle subjects: packages/core/src/gate/go-ahead.ts and gate/gate.ts (not built yet when this file
 // was written), plus the transport client of #5 that one component case sends through.
-const goAhead = (await import("../gate/go-ahead.js").catch(() => undefined)) as GoAheadModule | undefined;
-const gate = (await import("../gate/gate.js").catch(() => undefined)) as GateModule | undefined;
-const client = (await import("../transport/client.js").catch(() => undefined)) as ClientModule | undefined;
+const goAhead = (await importSubject("../gate/go-ahead.js")) as GoAheadModule | undefined;
+const gate = (await importSubject("../gate/gate.js")) as GateModule | undefined;
+const client = (await importSubject("../transport/client.js")) as ClientModule | undefined;
 const missing = [
   ...(goAhead === undefined ? ["packages/core/src/gate/go-ahead.ts"] : []),
   ...(gate === undefined ? ["packages/core/src/gate/gate.ts"] : []),

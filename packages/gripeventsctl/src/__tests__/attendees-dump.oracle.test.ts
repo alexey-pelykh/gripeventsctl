@@ -99,6 +99,27 @@ interface DumpSurface {
 
 type Probe = { ok: true; surface: DumpSurface } | { ok: false; missing: string };
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 async function probeSubject(): Promise<Probe> {
   const umbrella = (await import("../index.js")) as Partial<UmbrellaModule>;
   if (typeof umbrella.buildProgram !== "function" || typeof umbrella.buildServer !== "function") {
@@ -108,7 +129,7 @@ async function probeSubject(): Promise<Probe> {
   if (attendees?.commands.find((command) => command.name() === "dump") === undefined) {
     return { ok: false, missing: "the attendees dump command" };
   }
-  const testing = (await import("@gripeventsctl/testing").catch(() => undefined)) as Partial<TestingModule> | undefined;
+  const testing = (await importSubject("@gripeventsctl/testing")) as Partial<TestingModule> | undefined;
   if (testing === undefined) return { ok: false, missing: "@gripeventsctl/testing" };
   for (const helper of ["runCli", "linkMcp", "mockGrip"] as const) {
     if (typeof testing[helper] !== "function") return { ok: false, missing: `${helper}() in @gripeventsctl/testing` };

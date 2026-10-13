@@ -103,13 +103,34 @@ interface TestingModule {
   fixtureSecrets(): FixtureSecrets;
 }
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 // Oracle subject: packages/cli/src/commands/auth/signin.ts (not built yet when this file was written).
-const subject = (await import("../commands/auth/signin.js").catch(() => undefined)) as object | undefined;
+const subject = (await importSubject("../commands/auth/signin.js")) as object | undefined;
 if (subject === undefined && process.env.GRIPEVENTSCTL_ORACLES === "strict") {
   throw new Error("oracle subject missing: packages/cli/src/commands/auth/signin.ts");
 }
 // The harness the surface cases go through; it lands with the subject (#7 creates `runCli`).
-const testing = (await import("@gripeventsctl/testing").catch(() => undefined)) as TestingModule | undefined;
+const testing = (await importSubject("@gripeventsctl/testing")) as TestingModule | undefined;
 
 const API_ORIGIN = "https://api-prod.grip.events";
 const SLUG = "test-event-1";

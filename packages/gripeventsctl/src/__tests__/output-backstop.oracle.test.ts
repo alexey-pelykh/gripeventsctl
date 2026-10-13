@@ -75,12 +75,33 @@ interface TestingModule {
   fixtureSecrets(): FixtureSecrets;
 }
 
+/**
+ * Imports a probed subject. Resolves to `undefined` only when the module runner reports the probed
+ * specifier itself as not found. Any other failure (the subject throws at import, a syntax error, a
+ * dependency of the subject is missing) is rethrown, so the file fails instead of skipping.
+ */
+async function importSubject(specifier: string): Promise<unknown> {
+  try {
+    return await import(specifier);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    const found = /^Cannot find (?:module|package) '([^']*)' imported from /.exec(message)?.[1];
+    const tail = specifier.replace(/^(?:\.\.?\/)+/, "");
+    const subjectNotFound =
+      code === "ERR_MODULE_NOT_FOUND" && found !== undefined && (found === tail || found.endsWith(`/${tail}`));
+    const entryNotFound = message.startsWith(`Failed to resolve entry for package "${specifier}"`);
+    if (subjectNotFound || entryNotFound) return undefined;
+    throw error;
+  }
+}
+
 // Oracle subjects: packages/cli/src/lib/output.ts and packages/mcp/src/lib/tool-from-operation.ts
 // (not built yet when this file was written), reached through the package entry points, plus the
 // shared test package of the test helpers item.
-const cliEntry = (await import("@gripeventsctl/cli").catch(() => undefined)) as Partial<CliModule> | undefined;
-const mcpEntry = (await import("@gripeventsctl/mcp").catch(() => undefined)) as Partial<McpModule> | undefined;
-const testing = (await import("@gripeventsctl/testing").catch(() => undefined)) as TestingModule | undefined;
+const cliEntry = (await importSubject("@gripeventsctl/cli")) as Partial<CliModule> | undefined;
+const mcpEntry = (await importSubject("@gripeventsctl/mcp")) as Partial<McpModule> | undefined;
+const testing = (await importSubject("@gripeventsctl/testing")) as TestingModule | undefined;
 const missing: string[] = [];
 if (cliEntry === undefined || typeof cliEntry.writeOutput !== "function")
   missing.push("packages/cli/src/lib/output.ts");
