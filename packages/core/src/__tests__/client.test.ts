@@ -16,6 +16,7 @@ import {
   type Clock,
   type FakeClock,
   type FixtureSecrets,
+  type GripReply,
   type TempHome,
   configLookup200,
   configLookup404,
@@ -770,6 +771,85 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
       expect(conflictError.details).toEqual(["x", "y"]);
       expect(conflictError.hint).toContain("x");
       expect(conflictError.hint).toContain("y");
+      expect(calls()).toHaveLength(3);
+    });
+  });
+
+  it("the two documented reasons decide the kind on every status but 401, 403 included, each from one request", async () => {
+    // The pages record the body text only, never a status ("none seen live"), so the reason decides the kind
+    // whatever the status, and a cap answered with 403 reaches the write items as swipe-cap, not as api.
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      const statuses = [200, 201, 400, 403, 404, 409, 422, 500];
+      const reasons: [string, (statusCode: number) => GripReply, typeof SwipeCapError | typeof ModePhaseError][] = [
+        ["swipe-cap", swipeCapAnswer, SwipeCapError],
+        ["mode-phase", modePhaseAnswer, ModePhaseError],
+      ];
+      let sent = 0;
+      for (const status of statuses) {
+        for (const [kind, answer, errorClass] of reasons) {
+          const label = `${kind} answered with HTTP ${String(status)}`;
+          pool()
+            .intercept({ path, method: "POST" })
+            .reply(() => answer(status));
+          const error = await caught(client.post(relative, { message: "" }));
+          sent += 1;
+          expect(error, label).toBeInstanceOf(errorClass);
+          const gripError = error as GripError;
+          expect(gripError.kind, label).toBe(kind);
+          expect(gripError.status, label).toBe(status);
+          expect(calls(), label).toHaveLength(sent);
+        }
+      }
+      expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBeUndefined();
+    });
+  });
+
+  it("a 401 carrying either reason is auth-failed: the status pre-empts the body, as AC-08 says", async () => {
+    await withSession(async (home) => {
+      const clock = fakeClock("2026-10-13T09:00:00Z");
+      const client = newClient(home.env, { clock });
+      for (const answer of [swipeCapAnswer, modePhaseAnswer]) {
+        pool()
+          .intercept({ path, method: "POST" })
+          .reply(() => answer(401));
+        const error = await caught(client.post(relative, { message: "" }));
+        expect(error).toBeInstanceOf(AuthFailedError);
+        expect((error as GripError).kind).toBe("auth-failed");
+        expect((error as GripError).status).toBe(401);
+      }
+      expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T09:00:00Z");
+      expect(calls()).toHaveLength(2);
+      expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
+    });
+  });
+
+  it("on a 403 the load-balancer and gated-type rows still come first, and a directory search 403 carrying a documented reason is that reason's kind", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      const search = "container/1/search/";
+      const searchPath = (requestPath: string): boolean => requestPath.startsWith("/1/container/1/search/?");
+      const query = { page: 1, sort: "name", type_id: "1,7" };
+
+      pool()
+        .intercept({ path, method: "POST" })
+        .reply(() => loadBalancer403());
+      const html = await caught(client.post(relative, { message: "" }));
+      expect(html).toBeInstanceOf(LoadBalancerRejectedError);
+
+      pool()
+        .intercept({ path: searchPath, method: "GET" })
+        .reply(() => gatedType403(7));
+      const gated = await caught(client.get(search, { query }));
+      expect(gated).toBeInstanceOf(GatedTypeError);
+
+      pool()
+        .intercept({ path: searchPath, method: "GET" })
+        .reply(() => swipeCapAnswer(403));
+      const cap = await caught(client.get(search, { query }));
+      expect(cap).toBeInstanceOf(SwipeCapError);
+      expect((cap as GripError).status).toBe(403);
+
       expect(calls()).toHaveLength(3);
     });
   });
