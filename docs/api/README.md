@@ -95,7 +95,7 @@ The load balancer's 403 is an HTML page, not JSON.
 
 ## How claims are dated
 
-These pages port two research notes written on 2026-10-07 for World Summit AI 2026 (container `9840`, slug `wsai26`), with one later check on 2026-10-09.
+These pages port two research notes written on 2026-10-07 for World Summit AI 2026 (container `9840`, slug `wsai26`), with later checks on 2026-10-09 and 2026-10-13.
 Each claim carries one of these labels:
 
 | Label                        | Meaning                                                                                                                  |
