@@ -86,14 +86,13 @@ const root = resolve(home.dir);
 
 afterEach(async () => {
   const paths = guardedPaths(process.env);
-  const sendLog = await configuredSendLog(paths.config);
-  const candidates = [
-    paths.config,
-    paths.sendLog,
-    paths.goAheads,
-    paths.writeLock,
-    ...(sendLog === undefined ? [] : [sendLog]),
-  ];
+  const candidates = [paths.config, paths.sendLog, paths.goAheads, paths.writeLock];
+  // Read the config file for its `writes.send_log` only once its path is known to be inside the
+  // temporary home: a path outside it is reported, never opened.
+  if (isInside(paths.config, root)) {
+    const sendLog = await configuredSendLog(paths.config);
+    if (sendLog !== undefined) candidates.push(sendLog);
+  }
   const outside = candidates.filter((path) => !isInside(path, root));
   if (outside.length > 0) {
     throw new Error(

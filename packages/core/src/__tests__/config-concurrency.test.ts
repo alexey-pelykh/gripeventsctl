@@ -50,14 +50,6 @@ function runWorker(home: TempHome, args: string[]): Promise<{ code: number | nul
   });
 }
 
-/** Holds the event loop for `ms`, so a mutator keeps the lock long enough for a sibling to wait on it. */
-function hold(ms: number): void {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    // busy wait
-  }
-}
-
 describe("[CAP-CFG] concurrent saves leave one whole config", () => {
   it("component: two concurrent saveConfig() calls in one process, each under the cross-process lock", async () => {
     await withTempHome(async (home) => {
@@ -75,15 +67,12 @@ describe("[CAP-CFG] concurrent saves leave one whole config", () => {
     });
   });
 
-  it("component: two concurrent read-modify-write updates in one process keep both changes", async () => {
+  it("component: the in-process queue runs two read-modify-write updates one after the other, keeping both changes", async () => {
     await withTempHome(async (home) => {
       const store = createConfigStore({ env: home.env });
       await store.save({ version: 1, writes: { enabled: false } });
       await Promise.all([
-        store.update(({ config }) => {
-          hold(200);
-          return { ...config, writes: { ...config.writes, enabled: true } };
-        }),
+        store.update(({ config }) => ({ ...config, writes: { ...config.writes, enabled: true } })),
         store.update(({ config }) => ({ ...config, auth: { credentials: "op://Vault/Item" } })),
       ]);
       const { config } = await store.load();
