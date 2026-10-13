@@ -11,7 +11,7 @@
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const CONFIG_FILE_NAME = ".gripeventsctl.yaml";
 
@@ -26,10 +26,12 @@ export interface GuardedPaths {
 export function guardedPaths(env: NodeJS.ProcessEnv): GuardedPaths {
   const home = process.platform === "win32" ? env["USERPROFILE"] : env["HOME"];
   const override = env["GRIPEVENTSCTL_CONFIG_FILE"];
-  const config =
-    override === undefined || override === ""
-      ? join(home === undefined || home === "" ? homedir() : home, CONFIG_FILE_NAME)
-      : override;
+  let config: string;
+  if (override === undefined || override === "") {
+    config = join(home === undefined || home === "" ? homedir() : home, CONFIG_FILE_NAME);
+  } else {
+    config = isAbsolute(override) ? override : resolve(override);
+  }
   const prefix = config.endsWith(".yaml") ? config.slice(0, -".yaml".length) : config;
   return {
     config,

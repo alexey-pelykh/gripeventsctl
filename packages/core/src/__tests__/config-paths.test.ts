@@ -49,6 +49,7 @@ describe("[CAP-CFG] the config path and the paths derived from it", () => {
     for (const env of [
       { [HOME_NAME]: dir },
       { [HOME_NAME]: dir, [CONFIG_FILE_ENV]: join(dir, "elsewhere", "c.yaml") },
+      { [HOME_NAME]: dir, [CONFIG_FILE_ENV]: join("relative", "c.yaml") },
     ]) {
       const path = configPath(env);
       expect(guardedPaths(env)).toEqual({ config: path, ...derivedPaths(path, emptyConfig()) });
