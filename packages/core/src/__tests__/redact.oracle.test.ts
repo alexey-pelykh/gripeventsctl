@@ -343,7 +343,7 @@ describe.skipIf(redact === undefined)(
           '"user_token": "<session token: a 36-character UUID>"',
           '"Token": "<AWS Cognito token: a JWT about 1,000 characters long>"',
           "Authorization: Bearer <application_token>, Basic <base64(email:password)>",
-          "Authorization: Bearer $APPLICATION_TOKEN, Basic $BASIC",
+          "Authorization: Bearer $GRIPEVENTSCTL_APP_TOKEN, Basic $BASIC",
         ];
         for (const placeholder of placeholders) {
           expect(matches(SECRET_PATTERN_SOURCES, placeholder), placeholder).toEqual([]);
