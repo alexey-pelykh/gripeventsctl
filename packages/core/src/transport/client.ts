@@ -412,7 +412,14 @@ export class GripClient {
     return this.#token;
   }
 
-  /** Take the queue slot in call order; resolve the token and exchange inside it. */
+  /**
+   * Take the queue slot in call order; resolve the token and exchange inside it. Resolving inside the
+   * slot is a recorded decision (the investigation's advisory: the slot in call order, the token
+   * resolved inside it). It costs this: a first call whose `op://` reference spawns the 1Password CLI
+   * holds every later request in the process, a session-less `lookupConfig()` included, until
+   * `op read` returns, and that read carries no timeout (`config/op.ts`). Resolving outside the slot,
+   * and bounding the read, are open to the principal; neither is changed here.
+   */
   #send(spec: RequestSpec): Promise<Classified> {
     return enqueue(async () => {
       const headers =
@@ -598,7 +605,10 @@ export class GripClient {
     // Every 401 is `auth-failed`, and a JSON 403 outside the directory search stays `api`, on the
     // issue's table. What the platform answers to an expired or invalid session token is not
     // verified (`docs/api/not-verified.md` § Login and session: the earlier clients treated 401,
-    // and the dumper also 403, as an authentication failure).
+    // and the dumper also 403, as an authentication failure). The table's 401 row names one hint and
+    // one `recordAuthFailure()` call for every 401, while AC-08 scopes both to a 401 on an
+    // authenticated call; the login and lookup contexts below follow AC-08 (their own hints, nothing
+    // recorded), and which reading binds is an open point with the spec owner.
     if (status === 401) {
       if (spec.context === "authenticated") await this.#recordAuthFailure();
       const detail = reason === undefined ? "" : bodyExcerpt(reason);

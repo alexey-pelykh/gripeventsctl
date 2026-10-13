@@ -93,13 +93,20 @@ export function conflictDetails(body: unknown): string[] | undefined {
 /**
  * The config lookup's `data` (`docs/api/containers.md` § Fields of a 200 answer): the display name,
  * the container name, the active flag (`1` live, `0` ended), the application name, id and
- * per-event token, and the type permissions kept as sent. `permissions` may be absent (an ended
- * edition). `default_container_id` names the application's default event, not the looked-up
- * container, and is not typed; which field holds the container's own id is not verified.
+ * per-event token, and the type permissions kept as sent. `permissions` is optional, which departs
+ * from the issue's rule that a missing documented field is the `api` kind: the docs branch
+ * `docs/config-container-id-field` records (verified live 2026-10-13) that
+ * `data.application.permissions` was present for `wsai26` and absent for the ended edition `wsai25`,
+ * so requiring it would turn every ended-edition lookup into `api`. Whether the issue's typed-field
+ * list admits the absence is an open point with the spec owner. `default_container_id` names the
+ * application's default event, not the looked-up container, and is not typed; which field holds the
+ * container's own id is not verified.
  *
  * The JSON types come from the page's own literals (`1` / `0` for `active`, "numeric id, for
  * example `165`" for `application_id`, a display name that may be empty); the page's § Example
- * prints a script's formatted output, not the raw answer, so the raw types are not recorded. A live
+ * prints a script's formatted output, not the raw answer, so the page at this branch's base does not
+ * record the raw types. The same docs branch records both as JSON numbers (`active` (number),
+ * `application_id` (number), verified live 2026-10-13), which agrees with this schema. A live
  * answer of another type surfaces as `api` naming the field, the issue's rule for a mistyped
  * documented field, and stops the sign-in at the lookup until the page records the raw types.
  */
@@ -118,7 +125,11 @@ export type ConfigLookup = z.infer<typeof configLookupSchema>;
 /**
  * The login's `data` (`docs/api/login.md` § Response): `user_token` is the session token;
  * `chat_token` is the AWS Cognito object holding `Token` and `IdentityId`, also accepted as a bare
- * string or absent, because nothing in v1 uses it and its absence must not fail a sign-in.
+ * string or absent, because nothing in v1 uses it and its absence must not fail a sign-in. The issue
+ * reads two ways here: its § Response validation lists `data.chat_token` among the typed login fields
+ * (a missing documented field is the `api` kind), while its `login()` paragraph says only a missing
+ * `data.user_token` is `api`. The lenient reading is the recorded decision; which one binds is an
+ * open point with the spec owner.
  */
 export const loginAnswerSchema = z.object({
   user_token: z.string().min(1),
