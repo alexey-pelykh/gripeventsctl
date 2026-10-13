@@ -37,6 +37,45 @@ jobs:
       - run: pnpm lint
       - run: pnpm license-check
       - run: pnpm test
+      - run: pnpm test:scripts
+
+  # The oracle rules from CONTRIBUTING.md § Oracle tests, made mechanical. A pull request that
+  # touches a pre-authored `*.oracle.test.ts` file is a specification change and must carry the
+  # `spec-change` label. The strict oracle run is graded against `oracles.pending`: a listed file may
+  # fail only because its subject is missing, an unlisted file must pass, and a listed file whose
+  # cases pass must leave the ledger.
+  oracles:
+    name: Oracles
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+        with:
+          node-version: "24"
+      - name: Oracle edits carry the spec-change label
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HAS_SPEC_CHANGE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'spec-change') }}
+        run: |
+          git fetch --no-tags origin "$BASE_REF"
+          touched=$(git diff --name-only "origin/$BASE_REF...HEAD" -- '*.oracle.test.ts')
+          if [[ -z "$touched" ]]; then
+            echo "No oracle file touched."
+            exit 0
+          fi
+          echo "Oracle files touched by this pull request:"
+          echo "$touched"
+          if [[ "$HAS_SPEC_CHANGE_LABEL" != "true" ]]; then
+            echo "::error::An oracle file is a specification. This pull request edits one and does not carry the spec-change label."
+            exit 1
+          fi
+          echo "The pull request carries the spec-change label."
+      - run: pnpm build
+      - run: pnpm check-oracles
 
   ci-gate:
     name: CI
@@ -44,11 +83,16 @@ jobs:
     permissions: {}
     needs:
       - ci
+      - oracles
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - run: |
           if [[ "${{ needs.ci.result }}" != "success" ]]; then
             echo "CI failed: ${{ needs.ci.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.oracles.result }}" != "success" ]]; then
+            echo "Oracles failed: ${{ needs.oracles.result }}"
             exit 1
           fi
