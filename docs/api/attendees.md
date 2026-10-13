@@ -80,7 +80,7 @@ The source names the group (sponsor, exhibitor and organiser staff) but does not
 
 ### How to confirm a year's type set
 
-1. Read `data.application.permissions.type_permissions` from the config lookup (see [containers.md](containers.md#fields-of-a-200-answer)). **Verified live 2026-10-13**: the config answer for the ended edition `wsai25` had no `data.application.permissions` at all, so run this step while the edition is live.
+1. Read `data.application.permissions.type_permissions` from the config lookup (see [containers.md](containers.md#fields-of-a-200-answer)). Run this step while the edition is live, as that page records.
 2. Probe each type id alone with the directory search. A 200 means listable; a 403 means gated.
 
 Do not use the global catalog `GET thing/type`: it lists the types of the whole platform, not the container's set.
