@@ -382,8 +382,8 @@ export class GripClient {
   }
 
   /**
-   * The private fields by name, for the test that checks the client keeps no credential (AC-04); see
-   * `privateStateForTest`.
+   * The private fields by name, for the test that checks the client keeps no credential (issue #5 § Acceptance
+   * Criteria, the `login(...)` criterion); see `privateStateForTest`.
    */
   static #privateState(client: GripClient): Readonly<Record<string, unknown>> {
     return Object.freeze({
@@ -696,9 +696,9 @@ export class GripClient {
         ...(spec.body === undefined ? {} : { body: spec.body }),
         dispatcher: this.#dispatcher ?? getGlobalDispatcher(),
         // "manual" (issue #5 § Every request): fetch hands a 3xx answer back unfollowed, and `#classify`
-        // refuses it with the status AC-13 requires the `api` error to name; in "error" mode fetch
-        // would reject with a TypeError that carries no status. Nothing is sent to the `Location`
-        // target.
+        // refuses it with the status the `api` error must name (issue #5 § Acceptance Criteria, the 302
+        // criterion); in "error" mode fetch would reject with a TypeError that carries no status. Nothing
+        // is sent to the `Location` target.
         redirect: "manual",
         signal,
       });
@@ -1063,8 +1063,8 @@ function successOf(parsed: ParsedAnswer): Classified | undefined {
   const { status, subject, envelope } = parsed;
   if (envelope !== undefined && envelope.success && status >= 200 && status < 300) {
     // JSON cannot carry `undefined`, so `data` being undefined means the key is absent: a missing
-    // documented field, never a result (the envelope always has `data`, and AC-06 forbids returning
-    // `undefined` for it).
+    // documented field, never a result (the envelope always has `data`, and the envelope criterion of
+    // issue #5 § Acceptance Criteria forbids returning `undefined` for it).
     if (envelope.data === undefined) {
       const detail = missingFieldMessage("data");
       throw new ApiError(`${subject}: ${detail}`, detail, { status });
@@ -1140,9 +1140,10 @@ function throttledExcerpt(parsed: ParsedAnswer): string {
 
 /**
  * Test seam: a client's `#private` fields by name, which no reflection (`JSON.stringify`,
- * `Object.getOwnPropertyNames`, `util.inspect` with `showHidden`) can list. The AC-04 case asserts that
- * none of them holds the `Basic` value or the password after a login, and that the set of fields is
- * exactly the one the class declares. Exported from this module only, never from the package entry.
+ * `Object.getOwnPropertyNames`, `util.inspect` with `showHidden`) can list. The login case (issue #5
+ * § Acceptance Criteria, the `login(...)` criterion) asserts that none of them holds the `Basic` value or
+ * the password after a login, and that the set of fields is exactly the one the class declares.
+ * Exported from this module only, never from the package entry.
  */
 export function privateStateForTest(client: GripClient): Readonly<Record<string, unknown>> {
   return readPrivateState(client);

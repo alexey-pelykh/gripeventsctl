@@ -16,7 +16,7 @@ import { afterAll, afterEach } from "vitest";
 /**
  * The API origin, restated here because this package depends on no workspace package; `headers.test.ts` in core
  * asserts it equals `API_ORIGIN`. Named for the mock so it is never read as `GRIP_API_ORIGIN`, one of the
- * environment variables the client must ignore (AC-01).
+ * environment variables the client must ignore (issue #5 § Acceptance Criteria, the base URL criterion).
  */
 export const MOCK_API_ORIGIN = "https://api-prod.grip.events";
 

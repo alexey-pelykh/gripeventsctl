@@ -119,11 +119,10 @@ export function conflictDetails(body: unknown): string[] | undefined {
  *
  * The JSON types come from the page's own literals (`1` / `0` for `active`, "numeric id, for
  * example `165`" for `application_id`, a display name that may be empty); the page's § Example
- * prints a script's formatted output, not the raw answer, so the page at this branch's base does not
- * record the raw types. The live run of 2026-10-13 records both as JSON numbers, which agrees with
- * this schema, and #6 brings that fact to the page. A live answer of another type surfaces as `api`
- * naming the field, the rule for a mistyped documented field (issue #5 § The envelope and the
- * classification, response validation).
+ * prints a script's formatted output, not the raw answer. The live run of 2026-10-13 recorded by #6
+ * gives both as JSON numbers, which agrees with this schema. A live answer of another type surfaces
+ * as `api` naming the field, the rule for a mistyped documented field (issue #5 § The envelope and
+ * the classification, response validation).
  */
 export const configLookupSchema = z.object({
   container: z.object({
