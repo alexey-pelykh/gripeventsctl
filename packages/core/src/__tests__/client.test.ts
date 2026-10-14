@@ -1813,6 +1813,50 @@ describe("[CAP-THROTTLE] AC-22 a Retry-After of zero (issue #5 § The backoff sc
   });
 });
 
+describe("[CAP-THROTTLE] the retry after a 429 is the same request (issue #5 § The backoff schedule)", () => {
+  it("retries with the first request's headers byte-equal when a sign-in stored during the wait changed the session, and the next call uses the new one", async () => {
+    await withSession(async (home, secrets) => {
+      const clock = recordingClock();
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => throttled429());
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => containerList200())
+        .times(2);
+      const client = newClient(home.env, { clock });
+      const first = client.get("container");
+      await waitFor(() => clock.waiting() > 0, "the wait after the 429");
+      // A sign-in stored while the wait is pending: another token under a later signed_in_at.
+      const other = fixtureSecrets();
+      await saveSession(
+        { slug: SESSION_SLUG, container_id: 1, token: other.sessionToken },
+        { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
+      );
+      await drain(clock, first);
+      await first;
+      const [sent, retry] = calls();
+      if (sent === undefined || retry === undefined) throw new Error("the first request or its retry is missing");
+      expect(clock.sleeps).toEqual([SCHEDULE_S[0] * 1000]);
+      expect({ method: retry.method, path: retry.fullUrl, body: retry.body }).toEqual({
+        method: sent.method,
+        path: sent.fullUrl,
+        body: sent.body,
+      });
+      expect(lowerHeaders(retry.headers)).toEqual(lowerHeaders(sent.headers));
+      expect(lowerHeaders(retry.headers)["x-authorization"]).toBe(secrets.sessionToken);
+
+      // The stored change is not lost: the next call carries the new sign-in's token.
+      await client.get("container");
+      expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
+        secrets.sessionToken,
+        secrets.sessionToken,
+        other.sessionToken,
+      ]);
+    });
+  });
+});
+
 describe("[CAP-THROTTLE] the throttled error after the schedule ends", () => {
   it("carries the 429's reason as bodyExcerpt where the answer is the envelope, and the body text where it is not", async () => {
     await withSession(async (home) => {
