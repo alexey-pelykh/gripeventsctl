@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
+// The package entry exports what `main` exported before the transport item, under the same names, plus the issue's
+// § Public interface and the types its signatures need; nothing else (issue #5 § Public interface). A later item that
+// needs another name adds it with its own test (`__tests__/public-surface.test.ts`).
+
 export {
-  APPLICATION_TOKEN_PATTERN_SOURCE,
-  BASIC_PATTERN_SOURCE,
-  BEARER_PATTERN_SOURCE,
   JWT_PATTERN_SOURCE,
-  LOGIN_AUTHORIZATION_PATTERN_SOURCE,
-  MIN_REGISTERED_SECRET_LENGTH,
   REDACTED,
   RUNTIME_ONLY_PATTERN_SOURCES,
   SECRET_PATTERN_SOURCES,
@@ -20,7 +19,6 @@ export { type Clock, systemClock } from "./lib/clock.js";
 export {
   ApiError,
   AuthFailedError,
-  BODY_EXCERPT_LENGTH,
   ConfigError,
   ConflictError,
   GatedTypeError,
@@ -36,34 +34,21 @@ export {
   UnknownSlugError,
   UsageError,
   WriteRefusedError,
-  isGripError,
 } from "./transport/errors.js";
-// The issue's § Public interface names the four address and version constants; the header builders
-// stay inside the client, the one place the queue, the backoff, the timeout, the body cap and the
-// redirect refusal are enforced, so no later package can build a Grip request around them.
+// The four address and version constants; the header builders stay inside the client, the one place the queue, the
+// backoff, the timeout, the body cap and the redirect refusal are enforced, so no later package can build a Grip
+// request around them.
 export { API_ORIGIN, BASE_URL, GRIP_VERSION, USER_AGENT } from "./transport/headers.js";
-export { MAX_RETRIES, RETRY_AFTER_CAP_S, SCHEDULE_S } from "./transport/backoff.js";
+export { type ConfigLookup } from "./transport/envelope.js";
 export {
-  type ConfigLookup,
-  type Envelope,
-  type LoginAnswer,
-  MODE_PHASE_REASON,
-  SWIPE_CAP_REASON,
-  THROTTLING_REASON,
-  UNKNOWN_SLUG_REASON,
-} from "./transport/envelope.js";
-export {
-  BODY_CAP_BYTES,
   type GetOptions,
   GripClient,
   type GripClientOptions,
   type LoginInput,
   type LoginResult,
-  PROFILE_SPACING_MS,
   type PagesOptions,
   type PostOptions,
   type Query,
-  REQUEST_TIMEOUT_MS,
 } from "./transport/client.js";
 export {
   CONFIG_VERSION,
