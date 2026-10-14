@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
-import type { ChildProcess, ExecException } from "node:child_process";
+import { type ChildProcess, type ExecException, execFile as nodeExecFile } from "node:child_process";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -174,7 +174,7 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
       // `killed` true, the signal it sent, no exit code. A non-zero exit has `killed` false and a numeric code.
       const timedOut = Object.assign(new Error("Command failed: op read op://Vault/Item/token"), {
         killed: true,
-        signal: "SIGTERM",
+        signal: "SIGKILL",
         code: null,
         cmd: "op read op://Vault/Item/token",
       }) as unknown as ExecException;
@@ -184,11 +184,40 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
     const error = await expectConfigError(opRead("op://Vault/Item/token", {}, { execFile }));
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(execFile.mock.calls[0]?.[2].timeout).toBe(OP_TIMEOUT_MS);
+    expect(execFile.mock.calls[0]?.[2].killSignal).toBe("SIGKILL");
     expect(OP_TIMEOUT_MS).toBe(120_000);
     expect(error.kind).toBe("config");
     expect(error.message).toBe("1Password CLI (`op`) did not answer within 120 s while reading op://Vault/Item/token");
     expect(error.hint).toContain("`op signin`");
   });
+
+  it.skipIf(!STUB_OP_SUPPORTED)(
+    `ends a child that ignores SIGTERM at the timeout, so a hung op never holds the call past the bound${POSIX_ONLY}`,
+    async () => {
+      // With execFile's default SIGTERM, a child that ignores it keeps the call waiting until it exits on its own,
+      // and an exit 0 then reads as an answer. The real execFile runs here with every option opRead passes, the
+      // timeout alone shortened to 2 s: a freshly written stub takes about 0.3 s to start on macOS, and it must have
+      // recorded the call, and so set its trap, before the timeout fires.
+      const stub = await stubOp("trap '' TERM\nexec sleep 8");
+      try {
+        const shortened: ExecFileLike = (file, args, options, callback) =>
+          nodeExecFile(file, args, { ...options, timeout: 2_000 }, (error, stdout, stderr) => {
+            callback(error as ExecException | null, stdout, stderr);
+          });
+        const started = Date.now();
+        const error = await expectConfigError(
+          opRead("op://Vault/Item/token", { ...process.env }, { execFile: shortened }),
+        );
+        expect(Date.now() - started).toBeLessThan(6_000);
+        expect(error.message).toBe(
+          "1Password CLI (`op`) did not answer within 120 s while reading op://Vault/Item/token",
+        );
+        expect(await stub.calls()).toHaveLength(1);
+      } finally {
+        await stub.remove();
+      }
+    },
+  );
 });
 
 describe("[CAP-CFG] resolveSessionToken() through the 1Password CLI", () => {
