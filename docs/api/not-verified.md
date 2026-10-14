@@ -13,9 +13,13 @@ Conventions and labels are in [README.md](README.md).
 Those reach a real person.
 Run them only on the account owner's explicit go-ahead.
 
+## Every call
+
+- **Whether the API tolerates the headers Node's `fetch` adds by itself.** The client in `@gripeventsctl/core` sends its requests through undici's `fetch`, which adds `accept-language`, `accept-encoding` and `sec-fetch-mode` to every request beside the headers [README.md](README.md) records. No recorded run sent them. Verify with the client's first live read: a 200 answer with these headers present.
+
 ## Login and session
 
-- **Which headers the login call needs** besides `Authorization`, `Content-Type` and a browser `User-Agent` (`login-source`, `X-Grip-Version`, `origin`, `referer`). Verify by logging in with each header left out in turn. See [login.md](login.md).
+- **Which headers the login call needs** besides `Authorization`, `Content-Type` and a browser `User-Agent` (`Accept`, `login-source`, `X-Grip-Version`, `origin`, `referer`). The client in `@gripeventsctl/core` sends all five on the login. Verify by logging in with each header left out in turn. See [login.md](login.md).
 - **The token lifetime.** A token written at 21:09 on 2026-10-06 still worked at 22:35 that evening and at 07:39 on 2026-10-07, and all that morning. Verify by recording the last time a token works and the first time it fails.
 - **What the API answers to an expired or invalid `user_token`.** The existing clients treat 401 (and the dumper also 403) as an auth failure. Verify by sending a deliberately wrong token to a read-only call and recording the status and body.
 
