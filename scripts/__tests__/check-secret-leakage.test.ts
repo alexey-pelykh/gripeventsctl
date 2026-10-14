@@ -317,6 +317,26 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(result.stderr).toContain("FAIL: 1 tracked file(s) could not be read, so the check cannot vouch for them.");
   });
 
+  it("R24: flags a login Authorization value that only the login shape knows as one finding, the whole `Bearer …, Basic …` value", () => {
+    // A Bearer value under 16 characters and a Basic value of letters only: the standalone Basic shape leaves such a
+    // run to prose, and the bare Bearer shape is not a lint shape, so only the login shape can flag this line.
+    const bearer = randomBytes(6).toString("hex");
+    const basic = Array.from(randomBytes(24), (byte) => BEARER_ALPHABET.charAt(byte % 52)).join("");
+    const value = `Bearer ${bearer}, Basic ${basic}`;
+    write("fixtures/login-letters.txt", `Authorization: ${value}\n`);
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value ["));
+    expect(findings).toEqual([
+      `fixtures/login-letters.txt:1: secret-shaped value [the login Authorization value]: Bearer <REDA… (${String(value.length)} chars)`,
+    ]);
+    expect(result.stderr).not.toContain(bearer);
+    expect(result.stderr).not.toContain(basic);
+  });
+
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
     write(
       "docs/prose.md",

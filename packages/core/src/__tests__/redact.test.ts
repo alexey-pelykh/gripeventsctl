@@ -55,6 +55,21 @@ function lintMatches(text: string): string[] {
   return found;
 }
 
+describe("the login Authorization shape (docs/api/login.md § Request)", () => {
+  it("matches the whole `Bearer <x>, Basic <y>` value where no other shape matches a part of it, and redacts both values", () => {
+    // A Bearer value under the 16 characters the bare Bearer shape needs, and a Basic value of letters only, which the
+    // standalone Basic shape leaves to prose: only the login shape knows this value.
+    const bearer = randomBytes(6).toString("hex");
+    const basic = Array.from(randomBytes(24), (byte) =>
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".charAt(byte % 52),
+    ).join("");
+    const line = `Authorization: Bearer ${bearer}, Basic ${basic}`;
+    expect(lintMatches(line)).toEqual([`Bearer ${bearer}, Basic ${basic}`]);
+    expect(lintMatches(`Authorization: Basic ${basic}`)).toEqual([]);
+    expect(redactString(line)).toBe(`Authorization: Bearer ${REDACTED}, Basic ${REDACTED}`);
+  });
+});
+
 describe("the standalone Basic shape (docs/api/login.md § Request)", () => {
   // An English word run after `Basic ` is prose, not a credential: a word never holds a digit, `+`, `/` or `=`.
   const PROSE = [
