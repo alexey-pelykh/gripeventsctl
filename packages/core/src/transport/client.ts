@@ -21,9 +21,10 @@
  *   call therefore holds every other tool call for the whole schedule.
  * - Every answer is classified once, in the order the doc comment of `#classify` lists, into
  *   exactly one error class of `errors.ts`.
- * - Diagnostic lines on the injected `stderr`: one per answer with method, path and status, plus
- *   one per 429 wait naming the wait and the retry; never a header value or a body; every line
- *   through `redactString`.
+ * - Diagnostic lines on the injected `stderr`: one per answer with the method, the path template
+ *   (every numeric segment as `<id>`, no query value) and the status, plus one per 429 wait naming
+ *   the wait and the retry; never a header value or a body; every line through `redactString`. An
+ *   error message names the path as the caller passed it.
  *
  * The client uses the platform's plain HTTPS stack and sets no TLS option. It never signs in on
  * its own: `login()` runs only when the sign-in command calls it with the user's credentials.
@@ -173,7 +174,7 @@ type RequestContext = "authenticated" | "lookup" | "login";
 
 interface RequestSpec {
   method: Method;
-  /** The path as given, relative to `BASE_URL`; what the diagnostic line names. */
+  /** The path as given, relative to `BASE_URL`; every message names it, and the diagnostic line names its template. */
   path: string;
   url: URL;
   body?: string;
@@ -950,17 +951,30 @@ function unexpectedAnswerError(subject: string, http: string, status: number, te
 }
 
 /**
- * The method and the path as given: what the diagnostic line and every message name. The path is the
- * caller's string, ids included; whether the issue's "path template" means ids replaced by
- * placeholders is an open point with the spec owner. Never a header value or a body.
+ * The path's template: the query dropped, and every numeric segment replaced by `<id>` (issue #5 § Every request).
+ * The diagnostic line prints this and never the path as given, because an MCP host may write the server's stderr to
+ * a file, and a thing id identifies an attendee record; a query value may be a search text.
  */
-function describe(spec: RequestSpec): string {
-  return `${spec.method} ${spec.path}`;
+function pathTemplate(path: string): string {
+  return pathWithoutQuery(path)
+    .split("/")
+    .map((segment) => (/^\d+$/.test(segment) ? "<id>" : segment))
+    .join("/");
 }
 
-/** What every message of an error names: `describe(spec)`, and the page where the request is one of `pages()`. */
+/** The method and the path template: what the diagnostic line names. Never a header value or a body. */
+function describe(spec: RequestSpec): string {
+  return `${spec.method} ${pathTemplate(spec.path)}`;
+}
+
+/**
+ * What every message of an error names: the method and the path as the caller passed it, ids included, because the
+ * CLI prints the message to the user who typed the id and the MCP server returns it to the host that sent it (issue
+ * #5 § Every request); and the page where the request is one of `pages()`.
+ */
 function subjectOf(spec: RequestSpec): string {
-  return spec.page === undefined ? describe(spec) : `${describe(spec)} (page ${String(spec.page)})`;
+  const given = `${spec.method} ${spec.path}`;
+  return spec.page === undefined ? given : `${given} (page ${String(spec.page)})`;
 }
 
 /**

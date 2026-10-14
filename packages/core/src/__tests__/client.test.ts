@@ -93,9 +93,10 @@ vi.mock("../config/store.js", async (importOriginal) => {
 });
 const recordAuthFailureMock = vi.mocked(recordAuthFailure);
 
-/** The interest write path several cases send, relative to `BASE_URL`, and as it reaches the wire. */
+/** The interest write path several cases send, relative to `BASE_URL`, as it reaches the wire, and as its template. */
 const WRITE_PATH = "container/1/thing/user_id/match_manual/yes/to_thing/2";
 const WRITE_WIRE_PATH = `/1/${WRITE_PATH}`;
+const WRITE_TEMPLATE = "container/<id>/thing/user_id/match_manual/yes/to_thing/<id>";
 
 const CLIENT_SOURCE = fileURLToPath(new URL("../transport/client.ts", import.meta.url));
 const HEADERS_SOURCE = fileURLToPath(new URL("../transport/headers.ts", import.meta.url));
@@ -424,7 +425,7 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
       }
       expect(calls().map((call) => call.path)).toEqual(["/1/container/1/thing/5"]);
       expect(clock.sleeps).toEqual([]);
-      expect(stderr.text()).toBe("GET container/1/thing/5: 200\n");
+      expect(stderr.text()).toBe("GET container/<id>/thing/<id>: 200\n");
     });
   });
 
@@ -1646,7 +1647,7 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
         expect(message.split("page 1").length - 1, `${label}: no other page is named`).toBe(0);
         expect(message, label).toContain(detail);
         for (const line of stderr.text().trimEnd().split("\n"))
-          expect(line, label).toMatch(/^GET container\/1\/search\/: \d{3}$/);
+          expect(line, label).toMatch(/^GET container\/<id>\/search\/: \d{3}$/);
       }
       // A throttled page: the schedule runs out on page 2.
       const clock = recordingClock();
@@ -2050,7 +2051,7 @@ describe("[CAP-CLIENT] AC-14 the request timeout and the body cap", () => {
       expect(brokenError.hint).toBe("check the connection");
       expect(brokenError.status).toBe(200);
       expect(brokenError.message).toContain(`POST ${WRITE_PATH}: HTTP 200 `);
-      expect(resetStderr.text()).toContain(`POST ${WRITE_PATH}: HTTP 200 `);
+      expect(resetStderr.text()).toContain(`POST ${WRITE_TEMPLATE}: HTTP 200 `);
 
       // The request timeout firing while the body is still arriving.
       const clock = fakeClock();
@@ -2367,6 +2368,42 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
       }
       expect(stderr.text()).not.toContain(marker);
       expect((error as GripError).message).toContain(marker);
+    });
+  });
+
+  it("prints the path template on the diagnostic line, every numeric segment as <id> and no query value, while the error message keeps the path as given", async () => {
+    // Issue #5 § Every request: an MCP host may write the server's stderr to a file, and a thing id identifies an
+    // attendee record; the error message goes back to the caller who typed the id.
+    await withSession(async (home) => {
+      pool()
+        .intercept({ path: "/1/container/1/thing/5", method: "GET" })
+        .reply(() => profile200(5));
+      pool()
+        .intercept({ path: (path) => path.startsWith("/1/container/1/search/?"), method: "GET" })
+        .reply(() => failure("synthetic reason 3", 400));
+      pool()
+        .intercept({ path: "/1/container/1/thing/user_id/match/7/status?note=synthetic", method: "GET" })
+        .reply(() => matchStatus200("has_match_none"));
+      const stderr = stderrSink();
+      const client = newClient(home.env, { stderr: stderr.stream });
+
+      await client.get("container/1/thing/5");
+      const error = await caught(client.get("container/1/search/", { query: { search: "Test Person 1", page: 1 } }));
+      await client.get("container/1/thing/user_id/match/7/status?note=synthetic");
+
+      expect(stderr.text()).toBe(
+        [
+          "GET container/<id>/thing/<id>: 200",
+          "GET container/<id>/search/: 400",
+          "GET container/<id>/thing/user_id/match/<id>/status: 200",
+          "",
+        ].join("\n"),
+      );
+      expect(stderr.text()).not.toContain("Test Person");
+      expect(stderr.text()).not.toContain("synthetic");
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as GripError).message).toBe("GET container/1/search/: HTTP 400: synthetic reason 3");
+      expect(calls()).toHaveLength(3);
     });
   });
 
