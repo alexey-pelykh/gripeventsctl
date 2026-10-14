@@ -1740,13 +1740,20 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
           .intercept({ path, method: "POST" })
           .reply(() => answer(429));
         const pending = caught(newClient(home.env, { clock, stderr: stderr.stream }).post(relative, { message: "" }));
+        let settled = false;
+        void pending.then(() => {
+          settled = true;
+        });
         try {
-          // Settled at once, or the client is waiting on the schedule: the race names which.
-          const error = await Promise.race([pending, settle().then(() => "still waiting on the clock")]);
+          // The call settles, or it asks the clock for a backoff sleep, which this manual clock never ends: wait for
+          // whichever state comes first, however long the config read and the reply take, then require that no sleep
+          // was asked for.
+          await waitFor(() => settled || clock.waiting() > 0, "the call to settle or to wait on the clock");
+          expect(clock.sleeps, kind).toEqual([]);
+          const error = await pending;
           expect(error, kind).toBeInstanceOf(errorClass);
           expect((error as GripError).kind, kind).toBe(kind);
           expect((error as GripError).status, kind).toBe(429);
-          expect(clock.sleeps, kind).toEqual([]);
           expect(stderr.text(), kind).toBe(`POST ${WRITE_TEMPLATE}: 429\n`);
         } finally {
           await drain(clock, pending);
