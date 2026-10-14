@@ -3173,6 +3173,67 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
     });
   });
 
+  it("escapes every line-breaking character of a transport failure's text in the message and on the diagnostic line, so a failure never splits a line", async () => {
+    await withSession(async (home) => {
+      // A TLS name mismatch, for one, quotes the names the server's certificate carries.
+      const failure = Object.assign(new Error("altnames: DNS:first\nGET container: 200\u001b[2K\u0085\u2028end"), {
+        code: "ERR_TLS_CERT_ALTNAME_INVALID",
+      });
+      pool().intercept({ path: "/1/container", method: "GET" }).replyWithError(failure);
+      const stderr = stderrSink();
+      const error = await caught(newClient(home.env, { stderr: stderr.stream }).get("container"));
+      expect(error).toBeInstanceOf(NetworkError);
+      const { message } = error as GripError;
+      expect(lineBreaking(message)).toEqual([]);
+      expect(message).toContain(String.raw`DNS:first\u000aGET container: 200\u001b[2K\u0085\u2028end`);
+      // One diagnostic line, ended by its own line feed.
+      expect(stderr.text().endsWith("\n")).toBe(true);
+      expect(lineBreaking(stderr.text().slice(0, -1))).toEqual([]);
+    });
+  });
+
+  it("redacts a text the code does not control before it escapes it, so a line break after a scheme word hides no token from the patterns", async () => {
+    await withSession(async (home) => {
+      // A bare Bearer value: the pattern takes any whitespace after the scheme word, a line feed included. Escaped
+      // first, the line feed is no longer whitespace, and the token after it would stay.
+      const token = `t${randomBytes(12).toString("hex")}`;
+      const shaped = `Bearer\n${token}`;
+      const client = newClient(home.env);
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => success200({ [shaped]: "not a number" }));
+      const refusedKey = await caught(client.get("container", { schema: z.record(z.string(), z.number()) }));
+      const refusedPath = await caught(client.get(`container?x=${shaped}`));
+      pool()
+        .intercept({ path: (requested) => requested.startsWith("/1/config?container_name="), method: "GET" })
+        .reply(() => configLookup404());
+      const unknownSlug = await caught(client.lookupConfig(shaped));
+      pool()
+        .intercept({ path: "/1/user/account/login", method: "POST" })
+        .reply(() => failure("synthetic unauthorized 4", 401));
+      const secrets = fixtureSecrets();
+      const refusedLogin = await caught(
+        client.login({
+          applicationToken: secrets.applicationToken,
+          containerId: 1,
+          email: secrets.email,
+          password: secrets.password,
+          slug: shaped,
+        }),
+      );
+      const texts = {
+        "schema failure, message": (refusedKey as Error).message,
+        "refused path, message": (refusedPath as Error).message,
+        "unknown slug, message": (unknownSlug as Error).message,
+        "refused login, hint": (refusedLogin as GripError).hint,
+      };
+      for (const [label, text] of Object.entries(texts)) {
+        expect(text, label).not.toContain(token);
+        expect(text, label).toContain(REDACTED);
+      }
+    });
+  });
+
   it("owns a status or a bodyExcerpt key only where one was given, never a key holding undefined", () => {
     const local: GripError[] = [
       new NoSessionError(),
