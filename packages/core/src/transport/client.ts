@@ -32,6 +32,7 @@
 import { type Dispatcher, fetch, getGlobalDispatcher } from "undici";
 import type { ZodType } from "zod";
 
+import { OP_REFERENCE_PREFIX } from "../config/op.js";
 import {
   type ConfigStore,
   createConfigStore,
@@ -63,6 +64,7 @@ import {
 import {
   ApiError,
   AuthFailedError,
+  ConfigError,
   ConflictError,
   GatedTypeError,
   LOOKUP_BEARER_REFUSED_HINT,
@@ -98,6 +100,12 @@ const LONGEST_TIMER_MS = 2_147_483_647;
  * `lib/web/fetch/headers.js`).
  */
 const HTTP_WHITESPACE_AT_ENDS = /^[\t\n\r ]+|[\t\n\r ]+$/g;
+
+/**
+ * A header value as it is sent: tab, 0x20 to 0x7E and 0x80 to 0xFF only. fetch refuses a CR, an LF or a NUL (undici
+ * 8.11.2, `lib/web/fetch/util.js`), and the dispatcher every other character outside these ranges (`lib/core/util.js`).
+ */
+const HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
 
 /** The path part of `BASE_URL`: what every request path starts with. */
 const BASE_PATH = new URL(BASE_URL).pathname;
@@ -296,6 +304,21 @@ function sessionBoundStore(env: NodeJS.ProcessEnv, identity: SessionIdentity): C
     update: (mutate) =>
       store.update((current) => (sameSignIn(identity, current.config.session) ? mutate(current) : undefined)),
   };
+}
+
+/**
+ * The `config` error for a resolved session token the client does not send: one that is empty once the HTTP
+ * whitespace at its ends is cut, or that `HEADER_VALUE` refuses. It names where the token came from, the config file
+ * or the `op://` reference, and never the token.
+ */
+function sessionTokenRefused(session: { slug: string; token: string }, path: string, empty: boolean): ConfigError {
+  const fromReference = session.token.startsWith(OP_REFERENCE_PREFIX);
+  const source = fromReference ? `read from ${session.token}` : `stored in ${path}`;
+  const signIn = `run \`${signInHint(session.slug)}\` to store a new session`;
+  return new ConfigError(
+    `the session token ${source} ${empty ? "is empty" : "is not a valid header value"}`,
+    fromReference ? `check that ${session.token} holds the session token, or ${signIn}` : signIn,
+  );
 }
 
 /** Register every token a login answer carries before anything else reads it. */
@@ -563,7 +586,8 @@ export class GripClient {
    * reference, on the first call and again only once the stored session changed since, in its `token` field or its
    * `signed_in_at`, or a 401 dropped the cache; otherwise the token cached in memory is reused. So a sign-in or a
    * sign-out made while a long-lived client runs, as the MCP server's does, takes effect on its next call, with no
-   * restart and no request to the platform. The token is never written anywhere.
+   * restart and no request to the platform. The token is never written anywhere. A resolved token that is empty or
+   * not a valid header value is the `config` kind, raised before any request and never cached.
    */
   async #sessionToken(): Promise<string> {
     const { config, path, exists } = await loadConfig({ env: this.#env });
@@ -584,9 +608,13 @@ export class GripClient {
       return this.#token;
     }
     const token = await resolveSessionToken(config, { env: this.#env });
-    // fetch strips HTTP whitespace from both ends of a header value before it checks it, and quotes the stripped
-    // value when it refuses it; the store registered the token as stored, so the stripped form is registered too.
-    registerSecret(token.replace(HTTP_WHITESPACE_AT_ENDS, ""));
+    // fetch sends a header value with the HTTP whitespace at its ends cut; the store registered the token as stored, so
+    // the form sent is registered too.
+    const sent = token.replace(HTTP_WHITESPACE_AT_ENDS, "");
+    registerSecret(sent);
+    // An empty value would go out as it is, and fetch or the dispatcher would refuse an invalid one as a failed
+    // request, which reads as a fault of the connection: both are a fault of the stored session.
+    if (sent === "" || !HEADER_VALUE.test(sent)) throw sessionTokenRefused(config.session, path, sent === "");
     this.#token = token;
     this.#sessionIdentity = identity;
     return token;
