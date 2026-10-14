@@ -1962,6 +1962,43 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
     });
   });
 
+  it("refuses, before the first request, a pauseMs that is not a finite number from 0 to 2147483647 ms, the longest a timer waits", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      const refused = [Number.NaN, -1, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2_147_483_648];
+      for (const pauseMs of [...refused, Number.MAX_SAFE_INTEGER]) {
+        const error = await caught(
+          (async () => {
+            for await (const entry of client.pages("container/1/search/", { sort: "name" }, { pauseMs })) void entry;
+          })(),
+        );
+        expect(error, String(pauseMs)).toBeInstanceOf(TypeError);
+        expect((error as Error).message, String(pauseMs)).toContain(`: ${String(pauseMs)}`);
+      }
+      expect(calls()).toHaveLength(0);
+
+      // The upper bound is a wait like any other.
+      const clock = recordingClock();
+      pool()
+        .intercept({ path: (path) => path.startsWith("/1/container/1/search/?"), method: "GET" })
+        .reply((opts) => {
+          const page = Number(new URL(opts.path, API_ORIGIN).searchParams.get("page"));
+          return page === 1 ? success200([{ id: 1 }]) : success200([]);
+        })
+        .times(2);
+      const yielded: unknown[] = [];
+      const iterated = (async () => {
+        const paged = newClient(home.env, { clock }).pages("container/1/search/", {}, { pauseMs: 2_147_483_647 });
+        for await (const entry of paged) yielded.push(entry);
+      })();
+      await waitFor(() => clock.waiting() > 0, "the pause before page 2");
+      await clock.advance(2_147_483_647);
+      await iterated;
+      expect(yielded).toEqual([{ id: 1 }]);
+      expect(clock.sleeps).toEqual([2_147_483_647]);
+    });
+  });
+
   it("raises api naming the documented field data when a page is not an array, with the page number in the message", async () => {
     await withSession(async (home) => {
       pool()
