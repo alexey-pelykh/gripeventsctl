@@ -15,6 +15,7 @@ export { type SearchPageOptions, gatedType403, profile200, searchPage200 } from 
 export {
   type MatchStatus,
   conflict409,
+  conflict409InData,
   matchAnswer201,
   matchStatus200,
   modePhaseAnswer,
