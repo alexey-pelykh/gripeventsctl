@@ -13,7 +13,7 @@ describe("[CAP-THROTTLE] the schedule constants and the Retry-After forms (docs/
   });
 
   it("freezes the schedule, so no importer can change the 429 waits at run time", () => {
-    // `readonly number[]` binds at compile time only, and the package entry hands this array to every importer.
+    // `readonly number[]` binds at compile time only, and every module that imports the schedule shares this one array.
     const before = [...SCHEDULE_S];
     expect(Array.isArray(SCHEDULE_S)).toBe(true);
     expect(Object.isFrozen(SCHEDULE_S)).toBe(true);
