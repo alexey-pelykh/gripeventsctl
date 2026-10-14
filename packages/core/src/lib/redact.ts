@@ -177,21 +177,61 @@ export const GRIP_CDP_TOKEN_PATTERN_SOURCE =
  */
 export const BEARER_PATTERN_SOURCE = String.raw`(\bBearer\s+)(` + atLeast(TOKEN_CHARACTER_SOURCE, 16) + ")";
 
+/** A shape the lint and `redactString` both apply, with what the lint tells the reader of a finding of it. */
+export interface SecretShape {
+  /** What the shape matches: the lint names each finding with it. */
+  readonly name: string;
+  readonly source: string;
+  /** What to do, beside removing the value, when a real one reached a commit: the lint's FAIL message gives it. */
+  readonly remedy: string;
+}
+
+/** The remedy for a session token: a new sign-in stores a new session (`README.md` § Authentication). */
+const NEW_SESSION_REMEDY = "sign in again (`gripeventsctl auth signin <slug>`), so the stored session is a new one";
+/** The remedy for a Basic value: base64 is an encoding, so the value is the password itself. */
+const PASSWORD_REMEDY = "the base64 holds an email and a password: change that password";
+/** The remedy for a credential no command of the tool replaces: the chat token and the event's own tokens. */
+const HISTORY_REMEDY = "no command of this tool replaces it: rewrite the commit before it is pushed";
+
+/**
+ * Every shape the lint and `redactString` both apply, in the order of `SECRET_PATTERN_SOURCES`. Frozen, with each
+ * entry, like the pattern lists.
+ */
+export const SECRET_SHAPES: readonly SecretShape[] = Object.freeze(
+  [
+    {
+      name: "a session token after user_token or X-Authorization",
+      source: SESSION_TOKEN_PATTERN_SOURCE,
+      remedy: NEW_SESSION_REMEDY,
+    },
+    {
+      name: "a session token in an X-Authorization name/value pair",
+      source: SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE,
+      remedy: NEW_SESSION_REMEDY,
+    },
+    {
+      name: "a session token in an X-Authorization name/value pair",
+      source: SESSION_TOKEN_VALUE_NAME_PATTERN_SOURCE,
+      remedy: NEW_SESSION_REMEDY,
+    },
+    { name: "a JWT, such as the chat token", source: JWT_PATTERN_SOURCE, remedy: HISTORY_REMEDY },
+    { name: "the login Authorization value", source: LOGIN_AUTHORIZATION_PATTERN_SOURCE, remedy: PASSWORD_REMEDY },
+    { name: "a Basic value", source: BASIC_PATTERN_SOURCE, remedy: PASSWORD_REMEDY },
+    {
+      name: "the application token after general.token or a general key",
+      source: APPLICATION_TOKEN_PATTERN_SOURCE,
+      remedy: HISTORY_REMEDY,
+    },
+    { name: "a grip_cdp_token", source: GRIP_CDP_TOKEN_PATTERN_SOURCE, remedy: HISTORY_REMEDY },
+  ].map((shape) => Object.freeze(shape)),
+);
+
 /**
  * The shapes the lint (`scripts/check-secret-leakage.ts`) and `redactString` both apply. Frozen, like
  * `RUNTIME_ONLY_PATTERN_SOURCES`, because `readonly` binds at compile time only: the lint reads this list when it runs,
  * and the package entry hands both lists to every importer, so no importer can change what they match.
  */
-export const SECRET_PATTERN_SOURCES: readonly string[] = Object.freeze([
-  SESSION_TOKEN_PATTERN_SOURCE,
-  SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE,
-  SESSION_TOKEN_VALUE_NAME_PATTERN_SOURCE,
-  JWT_PATTERN_SOURCE,
-  LOGIN_AUTHORIZATION_PATTERN_SOURCE,
-  BASIC_PATTERN_SOURCE,
-  APPLICATION_TOKEN_PATTERN_SOURCE,
-  GRIP_CDP_TOKEN_PATTERN_SOURCE,
-]);
+export const SECRET_PATTERN_SOURCES: readonly string[] = Object.freeze(SECRET_SHAPES.map((shape) => shape.source));
 
 /** The shapes `redactString` applies and the lint never does. Frozen, like `SECRET_PATTERN_SOURCES`. */
 export const RUNTIME_ONLY_PATTERN_SOURCES: readonly string[] = Object.freeze([BEARER_PATTERN_SOURCE]);
