@@ -1028,6 +1028,57 @@ describe("[CAP-CLIENT] AC-04 the login call (docs/api/login.md § Request, § Re
   });
 });
 
+describe("[CAP-CLIENT] the secrets a login registers (issue #5 § Redaction)", () => {
+  it("registers the password and every chat_token value, so none reaches an error or a later line, even where no pattern knows its shape", async () => {
+    await withSession(async (home) => {
+      // Fresh values: nothing in this process registered them before these logins, and no pattern matches a bare
+      // password, an IdentityId or a chat token that is not a JWT.
+      const secrets = fixtureSecrets();
+      const stderr = stderrSink();
+      const client = newClient(home.env, { stderr: stderr.stream });
+      const input = {
+        applicationToken: secrets.applicationToken,
+        containerId: 1,
+        email: secrets.email,
+        password: secrets.password,
+      };
+      pool()
+        .intercept({ path: "/1/user/account/login", method: "POST" })
+        .reply(() => failure(`synthetic refusal of ${secrets.password}`, 401));
+      const refused = await caught(client.login(input));
+      expect(refused).toBeInstanceOf(AuthFailedError);
+      const error = refused as GripError;
+      const sinks = {
+        message: error.message,
+        hint: error.hint,
+        bodyExcerpt: error.bodyExcerpt ?? "",
+        string: String(refused),
+        json: JSON.stringify(refused),
+        stderr: stderr.text(),
+      };
+      for (const [sink, text] of Object.entries(sinks)) expect(text, sink).not.toContain(secrets.password);
+      expect(error.message).toContain(REDACTED);
+
+      // The documented chat_token object: its Token and its IdentityId.
+      const identityId = `eu-west-1:test-identity-${randomBytes(8).toString("hex")}`;
+      const token = `chat-${randomBytes(12).toString("hex")}`;
+      pool()
+        .intercept({ path: "/1/user/account/login", method: "POST" })
+        .reply(() => login200({ sessionToken: randomUUID(), chatToken: token, identityId }));
+      await client.login(input);
+      expect(redactString(`identity ${identityId} token ${token}`)).toBe(`identity ${REDACTED} token ${REDACTED}`);
+
+      // A chat_token sent as one string.
+      const plain = `chat-${randomBytes(12).toString("hex")}`;
+      pool()
+        .intercept({ path: "/1/user/account/login", method: "POST" })
+        .reply(() => success200({ user_token: randomUUID(), chat_token: plain }));
+      await client.login(input);
+      expect(redactString(`token ${plain}`)).toBe(`token ${REDACTED}`);
+    });
+  });
+});
+
 describe("[CAP-CLIENT] AC-05 the Basic scheme travels on the login request only", () => {
   it("exercises every entry point in one run: no other request carries Authorization with a Basic scheme", async () => {
     await withSession(async (home, secrets) => {
