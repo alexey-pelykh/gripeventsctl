@@ -2319,6 +2319,81 @@ describe("[CAP-CLIENT] AC-14 the request timeout and the body cap", () => {
   });
 });
 
+describe("[CAP-CLIENT] the body cap against the rows that need no body (issue #5, the rule across the rows)", () => {
+  /** An answer of `statusCode` whose body is one byte over the cap. */
+  function overTheCap(statusCode: number, headers: Record<string, string> = {}): GripReply {
+    return {
+      statusCode,
+      data: Buffer.alloc(BODY_CAP_BYTES + 1, 0x61),
+      responseOptions: { headers: { "content-type": "application/json", ...headers } },
+    };
+  }
+
+  it("decides a 401 and a 3xx on the status alone when the body is over the cap, with no excerpt, while a row that reads the body gives way to the cap", async () => {
+    await withSession(async (home) => {
+      const clock = fakeClock("2026-10-13T08:12:00Z");
+      const recordsBefore = recordAuthFailureMock.mock.calls.length;
+      const client = newClient(home.env, { clock });
+
+      // A 401: its row, its record, and no body excerpt, because the body was cut.
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => overTheCap(401));
+      const unauthorized = await caught(client.get("container"));
+      expect(unauthorized).toBeInstanceOf(AuthFailedError);
+      expect((unauthorized as GripError).kind).toBe("auth-failed");
+      expect((unauthorized as GripError).message).toBe("GET container: HTTP 401; the session was rejected");
+      expect(Object.hasOwn(unauthorized as object, "bodyExcerpt")).toBe(false);
+      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(1);
+      expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
+
+      // A 302: api with its status, never followed, no Location in the message, no excerpt.
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => overTheCap(302, { location: "https://second.example/1/container" }));
+      const redirected = await caught(client.get("container"));
+      expect(redirected).toBeInstanceOf(ApiError);
+      expect((redirected as GripError).status).toBe(302);
+      expect((redirected as GripError).message).toContain("302");
+      expect(JSON.stringify(redirected)).not.toContain("second.example");
+      expect(Object.hasOwn(redirected as object, "bodyExcerpt")).toBe(false);
+
+      // A 403 page over the cap: the load-balancer row reads the body, so it gives way to the cap: api, no excerpt.
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => overTheCap(403, { "content-type": "text/html" }));
+      const forbidden = await caught(client.get("container"));
+      expect(forbidden).toBeInstanceOf(ApiError);
+      expect((forbidden as GripError).kind).toBe("api");
+      expect((forbidden as GripError).status).toBe(403);
+      expect((forbidden as GripError).message).toContain("16 MiB");
+      expect(Object.hasOwn(forbidden as object, "bodyExcerpt")).toBe(false);
+
+      expect(calls()).toHaveLength(3);
+      expect(calls().filter((call) => call.origin !== API_ORIGIN)).toEqual([]);
+    });
+  });
+
+  it("runs the backoff on a 429 whose body is over the cap, on the status alone, and the throttled error carries no excerpt", async () => {
+    await withSession(async (home) => {
+      const clock = recordingClock();
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => overTheCap(429))
+        .times(4);
+      const pending = caught(newClient(home.env, { clock }).get("container"));
+      await drain(clock, pending);
+      const error = await pending;
+      expect(error).toBeInstanceOf(ThrottledError);
+      expect((error as GripError).kind).toBe("throttled");
+      expect((error as GripError).status).toBe(429);
+      expect(Object.hasOwn(error as object, "bodyExcerpt")).toBe(false);
+      expect(clock.sleeps).toEqual([60_000, 120_000, 240_000]);
+      expect(calls()).toHaveLength(4);
+    });
+  });
+});
+
 describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every diagnostic sink", () => {
   it("holds no fixture secret in message, String(), JSON, cause or bodyExcerpt, and bodyExcerpt is at most 200 characters", () => {
     const secrets = fixtureSecrets();

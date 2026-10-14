@@ -604,7 +604,7 @@ export class GripClient {
         this.#log(`${line}: 429; the backoff schedule has ended after ${String(MAX_RETRIES)} retries`);
         throw new ThrottledError(
           `${subject}: HTTP 429 after ${String(MAX_RETRIES)} retries; the platform is throttling`,
-          { status: 429, bodyExcerpt: throttledExcerpt(parsed) },
+          { status: 429, ...(parsed === undefined ? {} : { bodyExcerpt: throttledExcerpt(parsed) }) },
         );
       }
       this.#log(
@@ -690,12 +690,18 @@ export class GripClient {
   /**
    * The classification table (issue #5 § The envelope and the classification); raises exactly one error class or
    * returns `data`. A 429 never reaches it: `#exchange` decides every 429, the two reasons the app matches on at
-   * once, else the backoff schedule and then `throttled`. In order: a body over the cap and a 3xx are `api`,
-   * decided before any body is read for a reason; a 403 whose body is not JSON is `load-balancer-rejected`; a JSON
-   * 403 on a directory search with `not authorized` is `gated-type`; a 401 is `auth-failed` whatever its body; the
+   * once, else the backoff schedule and then `throttled`. In order: a 3xx is `api` and a 401 is `auth-failed`
+   * whatever its body, both decided on the status alone; a body over the cap is `api`; a 403 whose body is not JSON
+   * is `load-balancer-rejected`; a JSON 403 on a directory search with `not authorized` is `gated-type`; the
    * two reasons the app matches on are `swipe-cap` and `mode-phase` on every other status, a JSON 403 included; any
    * other JSON 403 is `api`; a 409 with an array under `error.data` or in `data` is `conflict`; the documented 404
    * on the lookup is `unknown-slug`; a 2xx `success: true` returns `data`; the rest is `api`.
+   *
+   * Two rules apply across the rows (issue #5 § The envelope and the classification): the rows that need no body
+   * decide on the status alone, so a body over the cap cannot hide them (a 3xx is `api`, a 401 follows its row with
+   * its record, and a 429 runs the backoff in `#exchange`), and every row that reads the body gives way to the cap,
+   * so the answer is `api` with no excerpt. A `data` that is empty or only whitespace counts as no reason, and the
+   * hint is the status.
    *
    * This method is that order: it calls one helper per row, in the order above, and each helper throws its kind
    * where its row applies and returns where it does not.
@@ -704,12 +710,12 @@ export class GripClient {
     const { status, text } = answer;
     const subject = subjectOf(spec);
     const http = `HTTP ${String(status)}`;
-    refuseBodyOverCap(subject, http, status, text);
     refuseRedirect(subject, http, status);
+    await this.#refuseUnauthorized(spec, status, subject, http, text);
+    refuseBodyOverCap(subject, http, status, text);
     const parsed = parseAnswer(spec, subject, http, status, text);
     refuseLoadBalancerPage(parsed);
     refuseGatedType(parsed);
-    await this.#refuseUnauthorized(parsed);
     refuseMatchedReason(parsed);
     refuseOtherJson403(parsed);
     refuseConflict(parsed);
@@ -720,35 +726,41 @@ export class GripClient {
   }
 
   /**
-   * The 401 row: `auth-failed` whatever the body. Every 401 is `auth-failed`, and a JSON 403 outside the directory
-   * search stays `api`, on the issue's table. What the platform answers to an expired or invalid session token is not
-   * verified (`docs/api/not-verified.md` § Login and session: the earlier clients treated 401, and the dumper also
-   * 403, as an authentication failure). The table's 401 row names one hint and one `recordAuthFailure()` call for
-   * every 401, while AC-08 scopes both to a 401 on an authenticated call; the login and lookup contexts below follow
-   * AC-08 (their own hints, nothing recorded), and which reading binds is an open point with the spec owner.
+   * The 401 row, decided on the status alone, so a body over the cap cannot hide it: `auth-failed` whatever the
+   * body. What the platform answers to an expired or invalid session token is not verified
+   * (`docs/api/not-verified.md` § Login and session). Three contexts (issue #5 § The envelope and the
+   * classification): an authenticated call records the failure; the login names the credentials and records
+   * nothing; the config lookup names the refused public bearer and records nothing. The excerpt is the reason where
+   * the body is under the cap, and none where it was cut.
    */
-  async #refuseUnauthorized(parsed: ParsedAnswer): Promise<void> {
-    const { spec, status, subject, http, reason } = parsed;
-    if (status === 401) {
-      if (spec.context === "authenticated") await this.#recordAuthFailure();
-      const detail = reason === undefined ? "" : bodyExcerpt(reason);
-      const message = `${subject}: ${http}${detail === "" ? "" : `: ${detail}`}`;
-      if (spec.context === "login") {
-        throw new AuthFailedError(`${message}; the login was refused`, {
-          status,
-          bodyExcerpt: detail,
-          hint: "check the email and the password, then run `gripeventsctl auth signin <slug>` again",
-        });
-      }
-      if (spec.context === "lookup") {
-        throw new AuthFailedError(`${message}; the public bootstrap bearer was refused`, {
-          status,
-          bodyExcerpt: detail,
-          hint: WIRE_BREAKAGE_HINT,
-        });
-      }
-      throw new AuthFailedError(`${message}; the session was rejected`, { status, bodyExcerpt: detail });
+  async #refuseUnauthorized(
+    spec: RequestSpec,
+    status: number,
+    subject: string,
+    http: string,
+    text: string | undefined,
+  ): Promise<void> {
+    if (status !== 401) return;
+    if (spec.context === "authenticated") await this.#recordAuthFailure();
+    const reason = text === undefined ? undefined : reasonOf(text);
+    const detail = reason === undefined ? "" : bodyExcerpt(reason);
+    const message = `${subject}: ${http}${detail === "" ? "" : `: ${detail}`}`;
+    const excerpt = text === undefined ? {} : { bodyExcerpt: detail };
+    if (spec.context === "login") {
+      throw new AuthFailedError(`${message}; the login was refused`, {
+        status,
+        ...excerpt,
+        hint: "check the email and the password, then run `gripeventsctl auth signin <slug>` again",
+      });
     }
+    if (spec.context === "lookup") {
+      throw new AuthFailedError(`${message}; the public bootstrap bearer was refused`, {
+        status,
+        ...excerpt,
+        hint: WIRE_BREAKAGE_HINT,
+      });
+    }
+    throw new AuthFailedError(`${message}; the session was rejected`, { status, ...excerpt });
   }
 
   /**
@@ -776,6 +788,15 @@ export class GripClient {
 // applies and returns where it does not.
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * The reason a body under the cap gives: `reasonText` of its `success: false` envelope's `data`, or `undefined` where
+ * the body is not such an envelope.
+ */
+function reasonOf(text: string): string | undefined {
+  const envelope = envelopeOf(parseJson(text));
+  return envelope !== undefined && !envelope.success ? reasonText(envelope.data) : undefined;
+}
+
 /** One answer as the rows after the body cap and the 3xx read it: the body parsed once, the envelope read from it. */
 interface ParsedAnswer {
   readonly spec: RequestSpec;
@@ -796,7 +817,7 @@ interface ParsedAnswer {
   readonly reason: string | undefined;
 }
 
-/** A body over the cap is `api`, decided before any body is read for a reason. */
+/** A body over the cap is `api`, with no excerpt: every row that reads the body gives way to it. */
 function refuseBodyOverCap(
   subject: string,
   http: string,
@@ -812,7 +833,7 @@ function refuseBodyOverCap(
   }
 }
 
-/** A 3xx is `api`, decided before any body is read for a reason. */
+/** A 3xx is `api`, decided on the status alone, before any body is read. */
 function refuseRedirect(subject: string, http: string, status: number): void {
   if (status >= 300 && status < 400) {
     // Never followed, and the `Location` value never reaches a message.
@@ -999,11 +1020,10 @@ function subjectOf(spec: RequestSpec): string {
 
 /**
  * What a final 429 carries as `bodyExcerpt`: its envelope's `data` where the answer is a `{ success, data }` envelope
- * with a string `data` (the documented throttling reason), the body text where it is not, and nothing for a body over
- * the cap (`parsed` is then `undefined`).
+ * with a string `data` (the documented throttling reason), and the body text where it is not. A body over the cap
+ * gives no excerpt: the caller passes none.
  */
-function throttledExcerpt(parsed: ParsedAnswer | undefined): string {
-  if (parsed === undefined) return "";
+function throttledExcerpt(parsed: ParsedAnswer): string {
   const data = parsed.envelope?.data;
   return typeof data === "string" ? data : parsed.text;
 }
