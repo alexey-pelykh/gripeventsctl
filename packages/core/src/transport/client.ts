@@ -254,8 +254,9 @@ export function isDirectorySearchPath(path: string): boolean {
 }
 
 /**
- * The stored session a client's token came from: its `slug`, which a 401's hint names, and its `token` field (the
- * token itself, or its `op://` reference) and `signed_in_at`, which a sign-in replaces.
+ * The stored session a client's token came from: its `slug`, which a 401's hint names when the config file cannot be
+ * read, and its `token` field (the token itself, or its `op://` reference) and `signed_in_at`, which a sign-in
+ * replaces.
  */
 interface SessionIdentity {
   slug: string;
@@ -551,7 +552,7 @@ export class GripClient {
     };
     const cached = this.#sessionIdentity;
     if (this.#token !== undefined && cached !== undefined && sameSignIn(cached, config.session)) {
-      // The same sign-in: the token stands; the identity follows the file, so a hint names the slug as stored now.
+      // The same sign-in: the token stands; the identity follows the file.
       this.#sessionIdentity = identity;
       return this.#token;
     }
@@ -781,17 +782,18 @@ export class GripClient {
         ...excerpt,
       });
     }
-    // The session the token came from, resolved before the call was sent: the failure is recorded beside it and the
-    // hint names its slug. Then the cache is dropped (issue #5 § The envelope and the classification, the 401 row on
-    // an authenticated call): the next call resolves the stored session again, and a sign-in stored since is used.
-    const identity = this.#sessionIdentity;
+    // The failure is recorded beside the session the token came from, resolved before the call was sent. Then the
+    // cache is dropped (issue #5 § The envelope and the classification, the 401 row on an authenticated call): the
+    // next call resolves the stored session again, and a sign-in stored since is used.
+    const sent = this.#sessionIdentity;
     await this.#recordAuthFailure();
     this.#token = undefined;
     this.#sessionIdentity = undefined;
+    const slug = await this.#storedSlug(sent);
     throw new AuthFailedError(`${message}; the session was rejected`, {
       status,
       ...excerpt,
-      ...(identity === undefined ? {} : { slug: identity.slug }),
+      ...(slug === undefined ? {} : { slug }),
     });
   }
 
@@ -810,6 +812,21 @@ export class GripClient {
       this.#log(
         `could not record the authentication failure: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+  }
+
+  /**
+   * The slug a 401's hint names: the one the config file holds when the 401 is classified (issue #5 § The envelope
+   * and the classification, the 401 row on an authenticated call). The hint is the command to run next, and running
+   * it replaces the stored session, so a sign-in stored while the request was in flight is the one named; with no
+   * session stored, none, and the hint keeps the literal `<slug>`. Where the file cannot be read, the slug of the
+   * session the token came from.
+   */
+  async #storedSlug(sent: SessionIdentity | undefined): Promise<string | undefined> {
+    try {
+      return (await loadConfig({ env: this.#env })).config.session?.slug;
+    } catch {
+      return sent?.slug;
     }
   }
 }

@@ -1402,6 +1402,77 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
     });
   });
 
+  /**
+   * Send `get("container")` from `client` against a 401 the mock holds until `meanwhile` has run, as another process
+   * would act on the config file while the request is in flight, and return what the call raised.
+   */
+  async function on401InFlight(client: GripClient, meanwhile: () => Promise<void>): Promise<unknown> {
+    const release = deferred<undefined>();
+    let reached = false;
+    pool()
+      .intercept({ path: "/1/container", method: "GET" })
+      .reply(async () => {
+        reached = true;
+        await release.promise;
+        return failure("synthetic unauthorized 1", 401);
+      });
+    const pending = caught(client.get("container"));
+    try {
+      await waitFor(() => reached, "the request to reach the mock");
+      await meanwhile();
+    } finally {
+      // Release the process-wide queue on every outcome, so a failed assertion cannot strand the later cases.
+      release.resolve(undefined);
+    }
+    return pending;
+  }
+
+  it("names the slug the config holds when the 401 is classified, so a sign-in to another event stored while the request was in flight is the one named", async () => {
+    // The hint is the command to run next, and running it replaces the stored session: it names the session stored
+    // now, never one a later sign-in already replaced (issue #5 § The envelope and the classification, the 401 row on
+    // an authenticated call).
+    await withSession(async (home) => {
+      const client = newClient(home.env, { clock: fakeClock("2026-10-13T08:12:00Z") });
+      const error = await on401InFlight(client, () =>
+        saveSession(
+          { slug: "otherevent", container_id: 2, token: fixtureSecrets().sessionToken },
+          { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
+        ),
+      );
+      expect(error).toBeInstanceOf(AuthFailedError);
+      expect((error as GripError).hint).toBe("gripeventsctl auth signin otherevent");
+      // The session stored since never failed.
+      const { config } = await loadConfig({ env: home.env });
+      expect(config.session?.slug).toBe("otherevent");
+      expect(config.session?.auth_failed_at).toBeUndefined();
+      expect(calls()).toHaveLength(1);
+    });
+  });
+
+  it("keeps the literal <slug> in the hint when a sign-out removed the stored session while the request was in flight", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env, { clock: fakeClock("2026-10-13T08:12:00Z") });
+      const error = await on401InFlight(client, () => clearSession({ env: home.env }));
+      expect(error).toBeInstanceOf(AuthFailedError);
+      expect((error as GripError).hint).toBe("gripeventsctl auth signin <slug>");
+      expect((await loadConfig({ env: home.env })).config.session).toBeUndefined();
+      expect(calls()).toHaveLength(1);
+    });
+  });
+
+  it("names the slug of the session the token came from when the config file cannot be read once the 401 arrives", async () => {
+    await withSession(async (home) => {
+      const stderr = stderrSink();
+      const client = newClient(home.env, { clock: fakeClock("2026-10-13T08:12:00Z"), stderr: stderr.stream });
+      const error = await on401InFlight(client, () => writeFile(home.configFile, "session: [not closed\n"));
+      expect(error).toBeInstanceOf(AuthFailedError);
+      expect((error as GripError).hint).toBe(`gripeventsctl auth signin ${SESSION_SLUG}`);
+      // The record could not be written either; the 401 is still what the call raises.
+      expect(stderr.text()).toContain("could not record the authentication failure");
+      expect(calls()).toHaveLength(1);
+    });
+  });
+
   it("a 401 on the config lookup is api, not auth-failed, with the hint naming the refused public bearer; nothing is recorded, no login (AC-22)", async () => {
     // Signing in again cannot help a refused public bearer (issue #5, the 401 rows). With a session in the config
     // file, so a failure wrongly recorded against it would show.
