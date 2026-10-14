@@ -126,7 +126,17 @@ export class ConfigError extends GripError {
   }
 }
 
-export const AUTH_FAILED_HINT = "gripeventsctl auth signin <slug>";
+/**
+ * The sign-in command a hint names: `gripeventsctl auth signin <slug>` with the slug where one is known (the stored
+ * session's slug after a 401 on an authenticated call, the slug a login signs in to), and the literal `<slug>` only
+ * where none is (issue #5 § The envelope and the classification, the 401 rows).
+ */
+export function signInHint(slug?: string): string {
+  return `gripeventsctl auth signin ${slug ?? "<slug>"}`;
+}
+
+/** The sign-in hint where no slug is known: what `NoSessionError` names. */
+export const AUTH_FAILED_HINT = signInHint();
 
 /**
  * The config holds no session: the user has not signed in, or has signed out. The auth commands
@@ -168,14 +178,15 @@ export class NetworkError extends GripError {
 /**
  * HTTP 401 on an authenticated call: the session was rejected. The client records the first
  * failure beside the session, never retries, and never signs in itself. Exit code 3. The hint is
- * the sign-in command unless the caller names another (a refused login names the credentials).
+ * the sign-in command naming `slug`, the stored session's slug where the client knows it, unless the
+ * caller names another hint (a refused login names the credentials).
  */
 export class AuthFailedError extends GripError {
   declare readonly kind: "auth-failed";
 
-  constructor(message: string, options: GripErrorOptions & { hint?: string } = {}) {
-    const { hint, ...rest } = options;
-    super("auth-failed", message, hint ?? AUTH_FAILED_HINT, rest);
+  constructor(message: string, options: GripErrorOptions & { hint?: string; slug?: string } = {}) {
+    const { hint, slug, ...rest } = options;
+    super("auth-failed", message, hint ?? signInHint(slug), rest);
   }
 }
 

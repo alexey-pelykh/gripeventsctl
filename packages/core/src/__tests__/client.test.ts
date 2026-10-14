@@ -185,20 +185,26 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
+/** The slug of the session `sessionConfig` and `withSession` write unless the case names another. */
+const SESSION_SLUG = "testevent";
+
 /** The version-1 config the config item writes after a sign-in: one session holding `token`, writes off. */
-function sessionConfig(token: string): Config {
+function sessionConfig(token: string, slug = SESSION_SLUG): Config {
   return {
     version: 1,
-    session: { slug: "testevent", container_id: 1, token, signed_in_at: "2026-10-12T11:00:00Z" },
+    session: { slug, container_id: 1, token, signed_in_at: "2026-10-12T11:00:00Z" },
     writes: { enabled: false },
   };
 }
 
 /** A fresh temporary home holding a version-1 config with one session, as the config item writes it. */
-function withSession<T>(fn: (home: TempHome, secrets: FixtureSecrets) => Promise<T>): Promise<T> {
+function withSession<T>(
+  fn: (home: TempHome, secrets: FixtureSecrets) => Promise<T>,
+  options: { slug?: string } = {},
+): Promise<T> {
   return withTempHome(async (home) => {
     const secrets = fixtureSecrets();
-    await saveConfig(sessionConfig(secrets.sessionToken), { env: home.env });
+    await saveConfig(sessionConfig(secrets.sessionToken, options.slug), { env: home.env });
     return fn(home, secrets);
   });
 }
@@ -784,7 +790,40 @@ describe("[CAP-CLIENT] AC-04 the login call (docs/api/login.md § Request, § Re
     });
   });
 
-  it("reports a refused login as auth-failed without touching any session record", async () => {
+  it("reports a refused login as auth-failed with the credentials hint naming the slug being signed in to, and records nothing", async () => {
+    // Issue #5 § The envelope and the classification, the login's 401 row: a refused sign-in says nothing about a
+    // stored session, so nothing is recorded, not even beside a session the file holds.
+    await withSession(async (home) => {
+      const secrets = fixtureSecrets();
+      const recordsBefore = recordAuthFailureMock.mock.calls.length;
+      const input = {
+        applicationToken: secrets.applicationToken,
+        containerId: 7,
+        email: secrets.email,
+        password: secrets.password,
+      };
+      pool()
+        .intercept({ path: "/1/user/account/login", method: "POST" })
+        .reply(() => failure("synthetic unauthorized 1", 401))
+        .times(2);
+      const named = await caught(newClient(home.env).login({ ...input, slug: "wsai26" }));
+      expect(named).toBeInstanceOf(AuthFailedError);
+      expect((named as GripError).kind).toBe("auth-failed");
+      expect((named as GripError).status).toBe(401);
+      expect((named as GripError).hint).toBe(
+        "check the email and the password, then run `gripeventsctl auth signin wsai26` again",
+      );
+      // Without a slug, the literal `<slug>` stands in: no slug is known.
+      const unnamed = await caught(newClient(home.env).login(input));
+      expect(unnamed).toBeInstanceOf(AuthFailedError);
+      expect((unnamed as GripError).hint).toBe(
+        "check the email and the password, then run `gripeventsctl auth signin <slug>` again",
+      );
+      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(0);
+      expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBeUndefined();
+      expect(calls()).toHaveLength(2);
+    });
+    // Without a stored session: no file is written either.
     await withTempHome(async (home) => {
       const secrets = fixtureSecrets();
       pool()
@@ -799,7 +838,6 @@ describe("[CAP-CLIENT] AC-04 the login call (docs/api/login.md § Request, § Re
         }),
       );
       expect(error).toBeInstanceOf(AuthFailedError);
-      expect((error as GripError).hint).not.toBe("gripeventsctl auth signin <slug>");
       expect((await loadConfig({ env: home.env })).exists).toBe(false);
     });
   });
@@ -1158,42 +1196,48 @@ describe("[CAP-CLIENT] AC-07 the three 403 answers", () => {
 });
 
 describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
-  it("raises auth-failed with the sign-in hint, records the first failure at the clock's time exactly once, sends once, never signs in", async () => {
-    await withSession(async (home) => {
-      const clock = fakeClock("2026-10-13T08:12:00Z");
-      const recordsBefore = recordAuthFailureMock.mock.calls.length;
-      pool()
-        .intercept({ path: "/1/container", method: "GET" })
-        .reply(() => failure("synthetic unauthorized 1", 401));
-      const error = await caught(newClient(home.env, { clock }).get("container"));
-      expect(error).toBeInstanceOf(AuthFailedError);
-      const gripError = error as GripError;
-      expect(gripError.kind).toBe("auth-failed");
-      expect(gripError.status).toBe(401);
-      expect(gripError.hint).toBe("gripeventsctl auth signin <slug>");
-      expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
-      // Exactly one record per 401, against the client's own environment and clock.
-      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(1);
-      expect(recordAuthFailureMock.mock.lastCall?.[0]).toMatchObject({ env: home.env, clock });
-      expect(calls()).toHaveLength(1);
-      expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
+  it("raises auth-failed with the hint naming the stored session's slug, records the first failure at the clock's time exactly once, sends once, never signs in", async () => {
+    // A config whose session slug is wsai26 gives `gripeventsctl auth signin wsai26`; the literal `<slug>` only when
+    // no slug is known.
+    await withSession(
+      async (home) => {
+        const clock = fakeClock("2026-10-13T08:12:00Z");
+        const recordsBefore = recordAuthFailureMock.mock.calls.length;
+        pool()
+          .intercept({ path: "/1/container", method: "GET" })
+          .reply(() => failure("synthetic unauthorized 1", 401));
+        const error = await caught(newClient(home.env, { clock }).get("container"));
+        expect(error).toBeInstanceOf(AuthFailedError);
+        const gripError = error as GripError;
+        expect(gripError.kind).toBe("auth-failed");
+        expect(gripError.status).toBe(401);
+        expect(gripError.hint).toBe("gripeventsctl auth signin wsai26");
+        expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
+        // Exactly one record per 401, against the client's own environment and clock.
+        expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(1);
+        expect(recordAuthFailureMock.mock.lastCall?.[0]).toMatchObject({ env: home.env, clock });
+        expect(calls()).toHaveLength(1);
+        expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
 
-      // A later 401 leaves the first record alone (the store writes nothing for it, the client still records it once),
-      // and an HTML 401 is still an authentication failure.
-      pool()
-        .intercept({ path: "/1/container", method: "GET" })
-        .reply(() => ({
-          statusCode: 401,
-          data: "<html>Unauthorized</html>",
-          responseOptions: { headers: { "content-type": "text/html" } },
-        }));
-      await clock.advance(60_000);
-      const again = await caught(newClient(home.env, { clock }).get("container"));
-      expect(again).toBeInstanceOf(AuthFailedError);
-      expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
-      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(2);
-      expect(calls()).toHaveLength(2);
-    });
+        // A later 401 leaves the first record alone (the store writes nothing for it, the client still records it once),
+        // and an HTML 401 is still an authentication failure.
+        pool()
+          .intercept({ path: "/1/container", method: "GET" })
+          .reply(() => ({
+            statusCode: 401,
+            data: "<html>Unauthorized</html>",
+            responseOptions: { headers: { "content-type": "text/html" } },
+          }));
+        await clock.advance(60_000);
+        const again = await caught(newClient(home.env, { clock }).get("container"));
+        expect(again).toBeInstanceOf(AuthFailedError);
+        expect((again as GripError).hint).toBe("gripeventsctl auth signin wsai26");
+        expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
+        expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(2);
+        expect(calls()).toHaveLength(2);
+      },
+      { slug: "wsai26" },
+    );
   });
 
   it("ends the message at the status when the 401's data is empty or only whitespace, which counts as no reason", async () => {
@@ -1236,7 +1280,7 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
 
       expect(error).toBeInstanceOf(AuthFailedError);
       expect((error as GripError).kind).toBe("auth-failed");
-      expect((error as GripError).hint).toBe("gripeventsctl auth signin <slug>");
+      expect((error as GripError).hint).toBe(`gripeventsctl auth signin ${SESSION_SLUG}`);
       // The client still sent session A's token, once per call, and recorded the 401 once.
       expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
         secrets.sessionToken,
