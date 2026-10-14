@@ -68,10 +68,64 @@ describe("[CAP-THROTTLE] the schedule constants and the Retry-After forms (docs/
     expect(backoffWaitS(3, "Mon, 12 Oct 2026 12:00:07 GMT", now)).toBe(7);
     expect(backoffWaitS(1, "Mon, 12 Oct 2026 12:15:00 GMT", now)).toBe(300);
     expect(backoffWaitS(1, "Mon, 12 Oct 2026 12:05:00 GMT", now)).toBe(300);
-    // The obsolete RFC 850 form is a date `Date.parse` understands too.
+    // The obsolete RFC 850 form.
     expect(backoffWaitS(1, "Monday, 12-Oct-26 12:00:07 GMT", now)).toBe(7);
     // A fraction of a second rounds up, so the retry never leaves before the date.
     expect(parseRetryAfter("Mon, 12 Oct 2026 12:00:07 GMT", new Date("2026-10-12T12:00:00.500Z"))).toBe(7);
+  });
+
+  it("reads an HTTP-date only in the three RFC 9110 § 5.6.7 forms, each as UTC, and any other date text as no header", () => {
+    const now = new Date("2026-10-21T07:28:00Z");
+    // IMF-fixdate, the RFC 850 form, and the asctime form with a two-digit and a one-digit day.
+    expect(parseRetryAfter("Wed, 21 Oct 2026 07:28:07 GMT", now)).toBe(7);
+    expect(parseRetryAfter("Wednesday, 21-Oct-26 07:28:07 GMT", now)).toBe(7);
+    expect(parseRetryAfter("Wed Oct 21 07:28:07 2026", now)).toBe(7);
+    expect(parseRetryAfter("Thu Oct  1 07:28:07 2026", new Date("2026-10-01T07:28:00Z"))).toBe(7);
+    // A leap second is in the grammar (00:00:00 to 23:59:60).
+    expect(parseRetryAfter("Wed, 21 Oct 2026 07:28:60 GMT", new Date("2026-10-21T07:28:50Z"))).toBe(10);
+    // The RFC 850 form's two-digit year: a date more than 50 years ahead is read in the most recent past year with
+    // those two digits (RFC 9110 § 5.6.7). 2075 is 49 years ahead; 2077 would be 51, so `77` is 1977, in the past.
+    const in2075 = (Date.UTC(2075, 9, 21, 7, 28, 7) - now.getTime()) / 1000;
+    expect(parseRetryAfter("Monday, 21-Oct-75 07:28:07 GMT", now)).toBe(in2075);
+    expect(backoffWaitS(1, "Monday, 21-Oct-75 07:28:07 GMT", now)).toBe(300);
+    expect(parseRetryAfter("Thursday, 21-Oct-77 07:28:07 GMT", now)).toBeUndefined();
+    // Date text that no HTTP-date grammar holds, most of which `Date.parse` reads: no header, so the schedule step
+    // applies.
+    const notHttpDates = [
+      "2026-10-21T07:28:07Z",
+      "2026-10-21 07:28:07",
+      "October 21, 2026 07:28:07 GMT",
+      "Wed, 21 Oct 2026 07:28:07 +0000",
+      "Wed, 21 Oct 2026 07:28:07 UTC",
+      "Wed, 21 Oct 2026 7:28:07 GMT",
+      "wed, 21 oct 2026 07:28:07 gmt",
+      "Wed,  21 Oct 2026 07:28:07 GMT",
+      "Wed, 21 Oct 26 07:28:07 GMT",
+      "Wed Oct 21 07:28:07 2026 GMT",
+      // Inside the grammar, but no such day or time.
+      "Wed, 31 Feb 2026 07:28:07 GMT",
+      "Wed, 21 Oct 2026 24:28:07 GMT",
+      "Wed, 00 Oct 2026 07:28:07 GMT",
+    ];
+    for (const value of notHttpDates) {
+      expect(parseRetryAfter(value, now), value).toBeUndefined();
+      expect(backoffWaitS(1, value, now), value).toBe(60);
+    }
+  });
+
+  it("reads the asctime form as UTC whatever the process's time zone", () => {
+    const saved = process.env.TZ;
+    try {
+      // Node reads a changed TZ at once; an asctime value names no zone, and RFC 9110 § 5.6.7 assumes UTC for it.
+      for (const zone of ["Asia/Kolkata", "America/Los_Angeles", "UTC"]) {
+        process.env.TZ = zone;
+        expect(parseRetryAfter("Wed Oct 21 07:28:07 2026", new Date("2026-10-21T07:28:00Z")), zone).toBe(7);
+        expect(parseRetryAfter("Thu Oct  1 07:28:07 2026", new Date("2026-10-01T07:28:00Z")), zone).toBe(7);
+      }
+    } finally {
+      if (saved === undefined) Reflect.deleteProperty(process.env, "TZ");
+      else process.env.TZ = saved;
+    }
   });
 
   it("ends after the third retry whatever the header says, and knows no attempt outside 1 to 3", () => {
