@@ -443,6 +443,11 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
         "./container/1/search/",
         "container/1/search/#x",
         "container/1/thing/%2e/6",
+        // A server may decode a percent-encoded character, while the per-path rules read the encoded spelling: thing 6
+        // as `%36`, the search as `%73earch` or with its slash as `%2F`. No documented path holds a "%".
+        "container/1/thing/%36",
+        "container/1/%73earch/",
+        "container/1/search%2F",
       ];
       for (const path of respelt) {
         const error = await caught(client.get(path, { query: { sort: "name" } }));

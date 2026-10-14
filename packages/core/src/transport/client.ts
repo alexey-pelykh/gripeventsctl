@@ -499,9 +499,12 @@ export class GripClient {
         `GripClient: a path is relative to ${BASE_URL} and must not start with "/" or leave it: ${quotedPath(path)}`,
       );
     }
-    if (holdsControlCharacter(path) || url.pathname !== `${BASE_PATH}${pathWithoutQuery(path)}`) {
+    // A "%" in the path part is refused too: a server may decode `%36` to `6`, while the per-path rules (the profile
+    // spacing, the gated-type rule) read the spelling the caller passed. No documented path holds one.
+    const pathPart = pathWithoutQuery(path);
+    if (holdsControlCharacter(path) || pathPart.includes("%") || url.pathname !== `${BASE_PATH}${pathPart}`) {
       throw new TypeError(
-        `GripClient: a path is sent as given, so it must be in the form the URL parser sends (no "." segment, backslash, space, fragment or control character): ${quotedPath(path)}`,
+        `GripClient: a path is sent as given, so it must be in the form the URL parser sends (no "." segment, backslash, space, fragment, percent-encoding or control character): ${quotedPath(path)}`,
       );
     }
     if (query !== undefined) {
