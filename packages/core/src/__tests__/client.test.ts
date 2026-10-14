@@ -7,7 +7,7 @@
  * `@gripeventsctl/testing`; nothing reaches the network. Time runs on the manual clock.
  */
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -606,6 +606,9 @@ describe("[CAP-CLIENT] AC-03 the config lookup by slug (docs/api/containers.md ย
   it("sends GET /1/config?container_name=<slug> with the bootstrap bearer, Accept and the User-Agent, and no session", async () => {
     await withTempHome(async (home) => {
       const secrets = fixtureSecrets();
+      // The `grip_cdp_token` the answer carries beside the application token (issue #5 ยง Redaction): a credential the
+      // schema never types; the fixture value is per run.
+      const gripCdpToken = randomBytes(24).toString("base64url");
       pool()
         .intercept({ path: "/1/config?container_name=wsai26", method: "GET" })
         .reply(() =>
@@ -613,6 +616,7 @@ describe("[CAP-CLIENT] AC-03 the config lookup by slug (docs/api/containers.md ย
             slug: "wsai26",
             displayName: "Test Event 1",
             applicationToken: secrets.applicationToken,
+            gripCdpToken,
             typePermissions: { "1": "read" },
           }),
         );
@@ -637,8 +641,11 @@ describe("[CAP-CLIENT] AC-03 the config lookup by slug (docs/api/containers.md ย
           permissions: { type_permissions: { "1": "read" } },
         },
       });
-      // The application token is a live secret the moment it is parsed.
+      // The application token and the grip_cdp_token are live secrets the moment they are parsed, and the
+      // grip_cdp_token is never typed, so it reaches no output.
+      expect("grip_cdp_token" in config.application.general).toBe(false);
       expect(redactString(`v=${secrets.applicationToken}`)).toBe(`v=${REDACTED}`);
+      expect(redactString(`v=${gripCdpToken}`)).toBe(`v=${REDACTED}`);
     });
   });
 

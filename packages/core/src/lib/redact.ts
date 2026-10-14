@@ -25,6 +25,10 @@
  *   an earlier line than the value: the lint matches each file as a whole
  *   (`scripts/check-secret-leakage.ts`), as `redactString` matches the whole text it is given, so a
  *   pretty-printed capture with one key per line is caught by both.
+ * - The `grip_cdp_token` of a config answer in its JSON key-value form, `"grip_cdp_token": "<value>"`
+ *   (the answer carries it under `data.application.general`, in a live run of 2026-10-13 recorded
+ *   by #6). The quoted key and the quoted value are both required, so a page that names the field
+ *   in prose never matches.
  *
  * `RUNTIME_ONLY_PATTERN_SOURCES` are applied by `redactString` and never by the lint: a bare
  * `Bearer <token>` is redacted at run time, but the public `docs/api/` pages legitimately print the
@@ -118,6 +122,14 @@ export const APPLICATION_TOKEN_PATTERN_SOURCE =
   ")";
 
 /**
+ * The `grip_cdp_token` of a config answer in its JSON key-value form. The quoted key and the quoted value are both
+ * required: a page naming the field in prose, an unquoted value and a placeholder never match. Groups: the key up to
+ * the value's opening quote, the value, the closing quote.
+ */
+export const GRIP_CDP_TOKEN_PATTERN_SOURCE =
+  String.raw`("grip_cdp_token"\s*:\s*")(` + atLeast(TOKEN_CHARACTER_SOURCE, 8) + String.raw`)(")`;
+
+/**
  * A bare `Bearer <token>` value. Groups: scheme, token. Run time only: the docs print the public bootstrap bearer this
  * way.
  */
@@ -134,6 +146,7 @@ export const SECRET_PATTERN_SOURCES: readonly string[] = Object.freeze([
   LOGIN_AUTHORIZATION_PATTERN_SOURCE,
   BASIC_PATTERN_SOURCE,
   APPLICATION_TOKEN_PATTERN_SOURCE,
+  GRIP_CDP_TOKEN_PATTERN_SOURCE,
 ]);
 
 /** The shapes `redactString` applies and the lint never does. Frozen, like `SECRET_PATTERN_SOURCES`. */
@@ -169,13 +182,14 @@ const JWT_PATTERN = new RegExp(JWT_PATTERN_SOURCE, "g");
 const LOGIN_AUTHORIZATION_PATTERN = new RegExp(LOGIN_AUTHORIZATION_PATTERN_SOURCE, "gi");
 const BASIC_PATTERN = new RegExp(BASIC_PATTERN_SOURCE, "gi");
 const APPLICATION_TOKEN_PATTERN = new RegExp(APPLICATION_TOKEN_PATTERN_SOURCE, "gi");
+const GRIP_CDP_TOKEN_PATTERN = new RegExp(GRIP_CDP_TOKEN_PATTERN_SOURCE, "gi");
 const BEARER_PATTERN = new RegExp(BEARER_PATTERN_SOURCE, "gi");
 
 /**
  * Replace every secret-shaped value and every registered live value in `input` with `<REDACTED>`,
  * keeping the context (header name, JSON key, scheme word) that makes the line readable:
  * `user_token: <REDACTED>`, `Authorization: Bearer <REDACTED>, Basic <REDACTED>`,
- * `"token": "<REDACTED>"`.
+ * `"token": "<REDACTED>"`, `"grip_cdp_token": "<REDACTED>"`.
  */
 export function redactString(input: string): string {
   let output = input.replace(
@@ -191,6 +205,10 @@ export function redactString(input: string): string {
   output = output.replace(
     APPLICATION_TOKEN_PATTERN,
     (_match, key: string, separator: string) => `${key}${separator}${REDACTED}`,
+  );
+  output = output.replace(
+    GRIP_CDP_TOKEN_PATTERN,
+    (_match, key: string, _value: string, quote: string) => `${key}${REDACTED}${quote}`,
   );
   output = output.replace(BEARER_PATTERN, (_match, scheme: string) => `${scheme}${REDACTED}`);
   return redactRegisteredSecrets(output);

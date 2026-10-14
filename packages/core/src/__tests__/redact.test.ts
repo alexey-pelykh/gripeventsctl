@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
+import { randomBytes } from "node:crypto";
+
 import { fixtureSecrets } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
@@ -77,6 +79,36 @@ describe("the standalone Basic shape (docs/api/login.md § Request)", () => {
       expect(lintMatches(`Authorization: Basic ${value}`), value).toEqual([`Basic ${value}`]);
       expect(redactString(`Authorization: Basic ${value}`)).toBe(`Authorization: Basic ${REDACTED}`);
       expect(redactString(`Basic ${value}`)).toBe(`Basic ${REDACTED}`);
+    }
+  });
+});
+
+describe("the grip_cdp_token shape (issue #5 § Redaction: the JSON key-value form under data.application.general)", () => {
+  it("matches and redacts the quoted key-value form, keeping the key and the quotes", () => {
+    const value = randomBytes(24).toString("base64url");
+    const json = `{"application": {"general": {"grip_cdp_token": "${value}", "application_id": 1}}}`;
+    expect(lintMatches(json)).toEqual([`"grip_cdp_token": "${value}"`]);
+    expect(redactString(json)).toBe(
+      `{"application": {"general": {"grip_cdp_token": "${REDACTED}", "application_id": 1}}}`,
+    );
+    expect(redactString(`"grip_cdp_token" : "${value}"`)).toBe(`"grip_cdp_token" : "${REDACTED}"`);
+    expect(redactString(`"grip_cdp_token":"${value}"`)).toBe(`"grip_cdp_token":"${REDACTED}"`);
+  });
+
+  it("needs the quoted key and the quoted value: prose naming the field, an unquoted value and a placeholder are left alone", () => {
+    // A docs/api page may name the field in prose; the redact oracle's U13 runs the lint patterns over every page.
+    const value = randomBytes(24).toString("base64url");
+    const untouched = [
+      "`grip_cdp_token` is a credential the config answer carries under `data.application.general`.",
+      `grip_cdp_token: ${value}`,
+      `"grip_cdp_token": ${value}`,
+      `grip_cdp_token=${value}`,
+      '"grip_cdp_token": "<value>"',
+      '"grip_cdp_token": "$GRIP_CDP_TOKEN"',
+    ];
+    for (const line of untouched) {
+      expect(lintMatches(line), line).toEqual([]);
+      expect(redactString(line), line).toBe(line);
     }
   });
 });

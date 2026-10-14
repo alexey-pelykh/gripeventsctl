@@ -290,15 +290,21 @@ function registerLoginSecrets(data: unknown): void {
   }
 }
 
-/** Register the per-event application token of a config answer before anything else reads it. */
+/**
+ * Register the credentials of a config answer before anything else reads it: the per-event application token and
+ * the `grip_cdp_token` beside it under `application.general`. The latter is read here, from the parsed answer, because
+ * the schema drops it as an unknown key; it is never typed or output (issue #5 § Redaction).
+ */
 function registerConfigSecrets(data: unknown): void {
   if (!isRecord(data)) return;
   const application = data["application"];
   if (!isRecord(application)) return;
   const general = application["general"];
   if (!isRecord(general)) return;
-  const token = general["token"];
-  if (typeof token === "string") registerSecret(token);
+  for (const key of ["token", "grip_cdp_token"]) {
+    const value = general[key];
+    if (typeof value === "string") registerSecret(value);
+  }
 }
 
 /**

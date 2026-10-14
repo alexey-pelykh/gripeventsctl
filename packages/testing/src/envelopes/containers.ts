@@ -17,6 +17,12 @@ export interface ConfigLookupOptions {
   applicationId?: number;
   /** The per-event application token: from `fixtureSecrets()`. */
   applicationToken: string;
+  /**
+   * The `grip_cdp_token` beside the application token, where given: a further credential under `application.general`,
+   * recorded by a live run of 2026-10-13 (issue #5 § Redaction, through #6) and never typed by the client. A per-run
+   * synthetic value, never a real one.
+   */
+  gripCdpToken?: string;
   /** Kept as sent; `{}` by default. */
   typePermissions?: unknown;
 }
@@ -35,6 +41,7 @@ export function configLookup200(options: ConfigLookupOptions): GripReply {
         application_name: options.applicationName ?? "Example Org 1",
         application_id: options.applicationId ?? 1,
         token: options.applicationToken,
+        ...(options.gripCdpToken === undefined ? {} : { grip_cdp_token: options.gripCdpToken }),
       },
       permissions: { type_permissions: options.typePermissions ?? {} },
     },

@@ -26,6 +26,8 @@ interface Secrets {
   chatToken: string;
   applicationToken: string;
   basic: string;
+  /** The `grip_cdp_token` of a config answer, a credential under `application.general`. */
+  cdpToken: string;
   /** The shape of the platform's public bootstrap bearer (32 letters and digits), never its value. */
   bootstrapBearer: string;
 }
@@ -49,6 +51,7 @@ function fixtureSecrets(): Secrets {
     chatToken: `eyJ${segment(24)}.${segment(60)}.${segment(32)}`,
     applicationToken: randomBytes(16).toString("hex"),
     basic: Buffer.from(`test.person.1@example.com:${segment(18)}`, "utf8").toString("base64"),
+    cdpToken: segment(24),
     bootstrapBearer: syntheticBearer(),
   };
 }
@@ -63,6 +66,7 @@ function shapedFiles(secrets: Secrets): Record<string, string> {
     "basic-alone.txt": `Authorization: Basic ${secrets.basic}\n`,
     "general-token-json.txt": `{"application": {"general": {"application_id": 1, "token": "${secrets.applicationToken}"}}}\n`,
     "general-token-dotted.txt": `general.token: ${secrets.applicationToken}\n`,
+    "grip-cdp-token-json.txt": `{"application": {"general": {"grip_cdp_token": "${secrets.cdpToken}"}}}\n`,
     // A pretty-printed config answer: the `"general"` key sits two lines above the token, so only a match over the
     // whole file catches it.
     "general-token-pretty.json": `${prettyConfigAnswer(secrets.applicationToken)}\n`,
@@ -89,6 +93,8 @@ function placeholders(bootstrapBearer: string): string[] {
     'Authorization: Bearer $GRIPEVENTSCTL_APP_TOKEN, Basic $BASIC"',
     `Authorization: Bearer ${bootstrapBearer}`,
     "`data.application.general.token` is the per-event application token.",
+    "`grip_cdp_token` is a credential too; the answer carries it under `data.application.general`.",
+    '"grip_cdp_token": "<value>"',
   ];
 }
 
