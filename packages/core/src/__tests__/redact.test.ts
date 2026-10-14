@@ -146,8 +146,28 @@ describe("redaction over a whole answer body (an error redacts up to the 16 MiB 
       ["a Basic value alone", `Basic ${long("1")}`, `Basic ${REDACTED}`],
       ["the application token key", `general.token: ${long("a")}`, `general.token: ${REDACTED}`],
       ["a JWT", `eyJ${long("a")}.${"b".repeat(10)}.${"c".repeat(10)}`, REDACTED],
+      [
+        "an escaped grip_cdp_token",
+        String.raw`\"grip_cdp_token\": \"${long("a")}\"`,
+        String.raw`\"grip_cdp_token\": \"${REDACTED}\"`,
+      ],
     ];
     for (const [label, input, expected] of cases) expect(redactString(input), label).toBe(expected);
+  });
+
+  it("leaves one run of backslashes as long as the body cap alone after each key, and never throws", () => {
+    // An escaped quote is a run of backslashes and a quote; a run with no quote after it matches no shape.
+    const backslashes = "\\".repeat(BODY_CAP_BYTES);
+    const { sessionToken } = fixtureSecrets();
+    const inputs = [
+      backslashes,
+      `user_token${backslashes}`,
+      `"grip_cdp_token${backslashes}`,
+      `"general": {${backslashes}`,
+      `"name${backslashes}`,
+      `"value": "${sessionToken}${backslashes}`,
+    ];
+    for (const input of inputs) expect(redactString(input) === input, input.slice(0, 24)).toBe(true);
   });
 });
 
@@ -206,5 +226,96 @@ describe("the registered live values (issue #5 § Redaction: every registered va
     const token = randomBytes(12).toString("hex");
     registerSecret(value);
     expect(redactString(`${value} ${token}`)).toBe(`${REDACTED} ${REDACTED}`);
+  });
+});
+
+describe("the key-context shapes in the JSON-escaped form and in the name/value header form", () => {
+  /** Per-run values of the three key-context shapes; none is registered, so only the patterns can hide them. */
+  function values(): { session: string; applicationToken: string; cdp: string } {
+    return {
+      session: randomUUID(),
+      applicationToken: randomBytes(16).toString("hex"),
+      cdp: randomBytes(24).toString("base64url"),
+    };
+  }
+
+  it("redacts each key-context shape in a JSON string that holds JSON text, keeping every escape", () => {
+    const { session, applicationToken, cdp } = values();
+    const answer = {
+      user_token: session,
+      application: { general: { application_id: 1, token: applicationToken, grip_cdp_token: cdp } },
+    };
+    const redactedAnswer = {
+      user_token: REDACTED,
+      application: { general: { application_id: 1, token: REDACTED, grip_cdp_token: REDACTED } },
+    };
+    // Once escaped (`\"user_token\": \"…\"`), escaped twice, and pretty-printed before escaping.
+    const escapedOnce = JSON.stringify(JSON.stringify(answer));
+    const escapedTwice = JSON.stringify(escapedOnce);
+    const escapedPretty = JSON.stringify(JSON.stringify(answer, null, 2));
+    expect(escapedOnce).toContain(String.raw`\"user_token\":\"`);
+    for (const [label, text, unescape] of [
+      ["once", escapedOnce, (out: string): unknown => JSON.parse(JSON.parse(out) as string)],
+      ["twice", escapedTwice, (out: string): unknown => JSON.parse(JSON.parse(JSON.parse(out) as string) as string)],
+      ["pretty", escapedPretty, (out: string): unknown => JSON.parse(JSON.parse(out) as string)],
+    ] as const) {
+      expect(lintMatches(text), label).toHaveLength(3);
+      const out = redactString(text);
+      for (const value of [session, applicationToken, cdp]) expect(out, label).not.toContain(value);
+      expect(unescape(out), label).toEqual(redactedAnswer);
+    }
+    // The header in a JSON-escaped header object.
+    const header = JSON.stringify(JSON.stringify({ "X-Authorization": session }));
+    expect(lintMatches(header)).toHaveLength(1);
+    expect(JSON.parse(JSON.parse(redactString(header)) as string)).toEqual({ "X-Authorization": REDACTED });
+  });
+
+  it("redacts a session token recorded as a name/value header pair, name first or value first, plain or escaped", () => {
+    const { session } = values();
+    const pairs = [
+      { name: "X-Authorization", value: session },
+      { value: session, name: "x-authorization" },
+    ];
+    for (const pair of pairs) {
+      const har = { request: { headers: [{ name: "Accept", value: "application/json" }, pair] } };
+      const redacted = {
+        request: {
+          headers: [
+            { name: "Accept", value: "application/json" },
+            { ...pair, value: REDACTED },
+          ],
+        },
+      };
+      for (const [label, text, unescape] of [
+        ["plain", JSON.stringify(har), (out: string): unknown => JSON.parse(out)],
+        ["pretty", JSON.stringify(har, null, 2), (out: string): unknown => JSON.parse(out)],
+        [
+          "escaped",
+          JSON.stringify(JSON.stringify(har)),
+          (out: string): unknown => JSON.parse(JSON.parse(out) as string),
+        ],
+      ] as const) {
+        const title = `${Object.keys(pair).join(" then ")}, ${label}`;
+        expect(lintMatches(text), title).toHaveLength(1);
+        expect(redactString(text), title).not.toContain(session);
+        expect(unescape(redactString(text)), title).toEqual(redacted);
+      }
+    }
+  });
+
+  it("leaves the placeholders and another header's name/value pair alone", () => {
+    const { session } = values();
+    const untouched = [
+      '{"name": "X-Authorization", "value": "<user_token>"}',
+      '{"name": "X-Authorization", "value": "$GRIPEVENTSCTL_TOKEN"}',
+      String.raw`{\"name\": \"X-Authorization\", \"value\": \"<user_token>\"}`,
+      `{"name": "X-Request-Id", "value": "${session}"}`,
+      `{"value": "${session}", "name": "X-Request-Id"}`,
+      String.raw`\"user_token\": \"<session token: a 36-character UUID>\"`,
+    ];
+    for (const line of untouched) {
+      expect(lintMatches(line), line).toEqual([]);
+      expect(redactString(line), line).toBe(line);
+    }
   });
 });

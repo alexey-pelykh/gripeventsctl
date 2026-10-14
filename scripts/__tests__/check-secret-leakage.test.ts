@@ -70,6 +70,11 @@ function shapedFiles(secrets: Secrets): Record<string, string> {
     // A pretty-printed config answer: the `"general"` key sits two lines above the token, so only a match over the
     // whole file catches it.
     "general-token-pretty.json": `${prettyConfigAnswer(secrets.applicationToken)}\n`,
+    // A JSON string holding the answer as JSON text: every quote is escaped (`\"user_token\": \"…\"`).
+    "user-token-escaped.json": `${JSON.stringify(JSON.stringify({ user_token: secrets.sessionToken }))}\n`,
+    // The header recorded as a name/value pair, as a HAR capture records it, in either order.
+    "x-authorization-name-value.har": `${JSON.stringify({ headers: [{ name: "X-Authorization", value: secrets.sessionToken }] }, null, 2)}\n`,
+    "x-authorization-value-name.json": `${JSON.stringify({ headers: [{ value: secrets.sessionToken, name: "X-Authorization" }] })}\n`,
   };
 }
 
