@@ -66,6 +66,7 @@ import {
   AuthFailedError,
   ConflictError,
   GatedTypeError,
+  LOOKUP_BEARER_REFUSED_HINT,
   LoadBalancerRejectedError,
   ModePhaseError,
   NetworkError,
@@ -73,7 +74,6 @@ import {
   SwipeCapError,
   ThrottledError,
   UnknownSlugError,
-  WIRE_BREAKAGE_HINT,
   bodyExcerpt,
   conflictText,
   errorCode,
@@ -341,9 +341,9 @@ export class GripClient {
   readonly #clock: Clock;
   readonly #env: NodeJS.ProcessEnv;
   readonly #stderr: NodeJS.WritableStream;
-  /** The session token, resolved once per client on the first authenticated call; in memory only. */
+  /** The session token, resolved on the first authenticated call and dropped after a 401; in memory only. */
   #token: string | undefined;
-  /** The stored session `#token` came from, set with it: what a 401 is recorded against. */
+  /** The stored session `#token` came from, set and dropped with it: what a 401 is recorded against. */
   #sessionIdentity: SessionIdentity | undefined;
 
   static {
@@ -702,8 +702,9 @@ export class GripClient {
   /**
    * The classification table (issue #5 § The envelope and the classification); raises exactly one error class or
    * returns `data`. A 429 never reaches it: `#exchange` decides every 429, the two reasons the app matches on at
-   * once, else the backoff schedule and then `throttled`. In order: a 3xx is `api` and a 401 is `auth-failed`
-   * whatever its body, both decided on the status alone; a body over the cap is `api`; a 403 whose body is not JSON
+   * once, else the backoff schedule and then `throttled`. In order: a 3xx is `api` and a 401 follows its row by
+   * context (`auth-failed` on an authenticated call and on the login, `api` on the config lookup), both decided on
+   * the status alone, whatever the body; a body over the cap is `api`; a 403 whose body is not JSON
    * is `load-balancer-rejected`; a JSON 403 on a directory search with `not authorized` is `gated-type`; the
    * two reasons the app matches on are `swipe-cap` and `mode-phase` on every other status, a JSON 403 included; any
    * other JSON 403 is `api`; a 409 with an array under `error.data` or in `data` is `conflict`; the documented 404
@@ -738,12 +739,13 @@ export class GripClient {
   }
 
   /**
-   * The 401 row, decided on the status alone, so a body over the cap cannot hide it: `auth-failed` whatever the
-   * body. What the platform answers to an expired or invalid session token is not verified
-   * (`docs/api/not-verified.md` § Login and session). Three contexts (issue #5 § The envelope and the
-   * classification): an authenticated call records the failure; the login names the credentials and records
-   * nothing; the config lookup names the refused public bearer and records nothing. The excerpt is the reason where
-   * the body is under the cap, and none where it was cut.
+   * The 401 rows, decided on the status alone, so a body over the cap cannot hide them, by context (issue #5 § The
+   * envelope and the classification): an authenticated call is `auth-failed` with the stored session's slug in the
+   * hint, records the failure beside that session and drops the cached token, so the next call reads the config file
+   * again; the login is `auth-failed` with the credentials hint and records nothing; the config lookup is `api` with
+   * the hint naming the refused public bearer and records nothing, because signing in again cannot help. What the
+   * platform answers to an expired or invalid session token is not verified (`docs/api/not-verified.md` § Login and
+   * session). The excerpt is the reason where the body is under the cap, and none where it was cut.
    */
   async #refuseUnauthorized(
     spec: RequestSpec,
@@ -753,7 +755,6 @@ export class GripClient {
     text: string | undefined,
   ): Promise<void> {
     if (status !== 401) return;
-    if (spec.context === "authenticated") await this.#recordAuthFailure();
     const reason = text === undefined ? undefined : reasonOf(text);
     const detail = reason === undefined ? "" : bodyExcerpt(reason);
     const message = `${subject}: ${http}${detail === "" ? "" : `: ${detail}`}`;
@@ -766,18 +767,22 @@ export class GripClient {
       });
     }
     if (spec.context === "lookup") {
-      throw new AuthFailedError(`${message}; the public bootstrap bearer was refused`, {
+      throw new ApiError(`${message}; the public bootstrap bearer was refused`, LOOKUP_BEARER_REFUSED_HINT, {
         status,
         ...excerpt,
-        hint: WIRE_BREAKAGE_HINT,
       });
     }
-    // The hint names the stored session's slug: the session the token came from, resolved before the call was sent.
-    const slug = this.#sessionIdentity?.slug;
+    // The session the token came from, resolved before the call was sent: the failure is recorded beside it and the
+    // hint names its slug. Then the cache is dropped (issue #5 § Public interface): the next call reads the config
+    // file again, and a sign-in stored since is used.
+    const identity = this.#sessionIdentity;
+    await this.#recordAuthFailure();
+    this.#token = undefined;
+    this.#sessionIdentity = undefined;
     throw new AuthFailedError(`${message}; the session was rejected`, {
       status,
       ...excerpt,
-      ...(slug === undefined ? {} : { slug }),
+      ...(identity === undefined ? {} : { slug: identity.slug }),
     });
   }
 

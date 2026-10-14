@@ -153,8 +153,9 @@ export class NoSessionError extends GripError {
 
 /**
  * Any other `success: false`, an unexpected status, a redirect (never followed; the status is
- * reported, the `Location` value never), a body over the cap, a missing documented field. The hint
- * is `data` as the reason, or the status, or the field name. Exit code 1.
+ * reported, the `Location` value never), a body over the cap, a missing documented field, a 401 on
+ * the config lookup (the public bearer refused, which no sign-in can fix). The hint is `data` as the
+ * reason, or the status, or the field name, or `LOOKUP_BEARER_REFUSED_HINT`. Exit code 1.
  */
 export class ApiError extends GripError {
   declare readonly kind: "api";
@@ -176,10 +177,11 @@ export class NetworkError extends GripError {
 }
 
 /**
- * HTTP 401 on an authenticated call: the session was rejected. The client records the first
- * failure beside the session, never retries, and never signs in itself. Exit code 3. The hint is
- * the sign-in command naming `slug`, the stored session's slug where the client knows it, unless the
- * caller names another hint (a refused login names the credentials).
+ * HTTP 401 on an authenticated call (the session was rejected) or on the login (the credentials were
+ * refused). After the former the client records the first failure beside the session and drops the
+ * cached token; it never retries and never signs in itself. Exit code 3. The hint is the sign-in
+ * command naming `slug`, the stored session's slug where the client knows it, unless the caller
+ * names another hint (a refused login names the credentials).
  */
 export class AuthFailedError extends GripError {
   declare readonly kind: "auth-failed";
@@ -241,6 +243,13 @@ export class GatedTypeError extends GripError {
 export const WIRE_BREAKAGE_HINT = "update the tool, or report it with the wire-breakage issue template";
 
 export const LOAD_BALANCER_REJECTED_HINT = `the platform rejected the request before the API saw it; ${WIRE_BREAKAGE_HINT}`;
+
+/**
+ * The hint of a 401 on the config lookup: the platform refused the public bootstrap bearer the tool sends with it,
+ * which no sign-in can fix, so the answer is the `api` kind and nothing is recorded (issue #5 § The envelope and the
+ * classification, the 401 rows).
+ */
+export const LOOKUP_BEARER_REFUSED_HINT = `the platform refused the public lookup bearer; ${WIRE_BREAKAGE_HINT}`;
 
 /**
  * HTTP 403 with a body that is not JSON: the load balancer's HTML page. Never retried with another
