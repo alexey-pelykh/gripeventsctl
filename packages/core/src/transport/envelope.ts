@@ -70,6 +70,16 @@ export function dataText(data: unknown): string {
   }
 }
 
+/**
+ * `data` as the reason of a `success: false` answer: `dataText(data)`, or the empty string where that text is empty
+ * or only whitespace, which counts as no reason (issue #5 § The envelope and the classification): the message then
+ * ends at the status and the hint is the status.
+ */
+export function reasonText(data: unknown): string {
+  const text = dataText(data);
+  return text.trim() === "" ? "" : text;
+}
+
 /** True where a 403 body's `data` is the gated-type answer `thing N not authorized`. */
 export function isGatedTypeReason(data: unknown): data is string {
   return typeof data === "string" && GATED_TYPE_PATTERN.test(data);

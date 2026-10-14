@@ -267,16 +267,31 @@ export class ModePhaseError extends GripError {
 }
 
 /**
- * HTTP 409 with a body holding an `error.data` array; the array is the hint, as the app shows it, cut
- * to the excerpt length like every hint built from a body, while `details` keeps every item whole for
- * the write items to read. Exit code 1.
+ * The text an HTTP 409's array gives, joined with `; `, or `undefined` where no entry holds a character beyond
+ * whitespace: such an array gives no reason (issue #5, the 409 row), so the message ends at the status and the hint
+ * is the status.
+ */
+export function conflictText(details: readonly string[]): string | undefined {
+  return details.some((detail) => detail.trim() !== "") ? details.join("; ") : undefined;
+}
+
+/**
+ * HTTP 409 with a body holding an array, under `error.data` or as the envelope's own `data`; the array is the hint,
+ * as the app shows it, cut to the excerpt length like every hint built from a body, or `HTTP 409` where the array
+ * holds no text, while `details` keeps every item whole for the write items to read. The status is 409 unless the
+ * caller names another. Exit code 1.
  */
 export class ConflictError extends GripError {
   declare readonly kind: "conflict";
   readonly details: readonly string[];
 
-  constructor(message: string, details: readonly string[], options?: GripErrorOptions) {
-    super("conflict", message, bodyExcerpt(details.join("; ")), options);
+  constructor(message: string, details: readonly string[], options: GripErrorOptions = {}) {
+    const status = options.status ?? 409;
+    const text = conflictText(details);
+    super("conflict", message, text === undefined ? `HTTP ${String(status)}` : bodyExcerpt(text), {
+      ...options,
+      status,
+    });
     this.details = details.map((detail) => redactString(detail));
   }
 }

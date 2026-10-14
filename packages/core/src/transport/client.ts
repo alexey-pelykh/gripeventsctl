@@ -51,7 +51,6 @@ import {
   UNKNOWN_SLUG_REASON,
   configLookupSchema,
   conflictDetails,
-  dataText,
   envelopeOf,
   gatedThingId,
   isGatedTypeReason,
@@ -59,6 +58,7 @@ import {
   loginAnswerSchema,
   missingFieldMessage,
   parseJson,
+  reasonText,
   schemaFailureMessage,
 } from "./envelope.js";
 import {
@@ -75,6 +75,7 @@ import {
   UnknownSlugError,
   WIRE_BREAKAGE_HINT,
   bodyExcerpt,
+  conflictText,
   errorCode,
 } from "./errors.js";
 import { BASE_URL, type HeaderSet, authenticatedHeaders, loginHeaders, lookupHeaders } from "./headers.js";
@@ -776,7 +777,10 @@ interface ParsedAnswer {
   /** The parsed body, or `undefined` where it is not JSON. */
   readonly json: unknown;
   readonly envelope: Envelope | undefined;
-  /** The `data` of a `success: false` envelope as text; `undefined` for every other answer. */
+  /**
+   * The `data` of a `success: false` envelope as text, the empty string where it is empty or only whitespace (no
+   * reason, so the hint is the status); `undefined` for every other answer.
+   */
   readonly reason: string | undefined;
 }
 
@@ -812,7 +816,7 @@ function refuseRedirect(subject: string, http: string, status: number): void {
 function parseAnswer(spec: RequestSpec, subject: string, http: string, status: number, text: string): ParsedAnswer {
   const json = parseJson(text);
   const envelope = envelopeOf(json);
-  const reason = envelope !== undefined && !envelope.success ? dataText(envelope.data) : undefined;
+  const reason = envelope !== undefined && !envelope.success ? reasonText(envelope.data) : undefined;
   return { spec, status, text, subject, http, json, envelope, reason };
 }
 
@@ -882,17 +886,18 @@ function refuseOtherJson403(parsed: ParsedAnswer): void {
   }
 }
 
-/** A 409 with an `error.data` array is `conflict`. */
+/** A 409 with an array under `error.data` or as the envelope's own `data` is `conflict`. */
 function refuseConflict(parsed: ParsedAnswer): void {
   const { status, subject, http, json } = parsed;
   if (status === 409) {
     const details = conflictDetails(json);
     if (details !== undefined) {
-      // An array whose every entry is the empty string, however many entries it holds, gives no text: the message
-      // ends at the status, as an empty reason does. Any entry with text keeps the joined array in the message.
-      const joined = details.join("; ");
-      const tail = details.every((detail) => detail === "") ? "" : `: ${bodyExcerpt(joined)}`;
-      throw new ConflictError(`${subject}: ${http}${tail}`, details, { status, bodyExcerpt: joined });
+      // An array whose entries hold no text gives no reason (issue #5, the 409 row): the message ends at the status
+      // and the error's hint is the status, while `bodyExcerpt` keeps the joined array. Any entry with text keeps the
+      // joined array in the message.
+      const text = conflictText(details);
+      const tail = text === undefined ? "" : `: ${bodyExcerpt(text)}`;
+      throw new ConflictError(`${subject}: ${http}${tail}`, details, { status, bodyExcerpt: details.join("; ") });
     }
   }
 }
@@ -935,9 +940,9 @@ function unclassifiedError(parsed: ParsedAnswer): ApiError {
 
 /**
  * The `api` error of a `success: false` answer, the table's row "any other `success: false`": the reason's excerpt
- * is the message tail and the hint, and the reason is `bodyExcerpt`. Where the answer gives no reason (`data` absent
- * or the empty string), the hint is the status, the message ends at the status, and `bodyExcerpt` carries the body
- * text, as it does for an unexpected answer.
+ * is the message tail and the hint, and the reason is `bodyExcerpt`. Where the answer gives no reason (`data` absent,
+ * empty or only whitespace), the hint is the status, the message ends at the status, and `bodyExcerpt` carries the
+ * body text, as it does for an unexpected answer.
  */
 function reasonError(line: string, http: string, status: number, reason: string, text: string): ApiError {
   if (reason === "") return new ApiError(`${line}: ${http}`, http, { status, bodyExcerpt: text });
