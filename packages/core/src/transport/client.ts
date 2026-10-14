@@ -88,6 +88,12 @@ export const BODY_CAP_BYTES = 16 * 1024 * 1024;
 export const PROFILE_SPACING_MS = 1_000;
 
 /**
+ * The longest wait a timer takes: for a longer delay, `setTimeout` waits 1 ms instead and warns (`TimeoutOverflowWarning`,
+ * Node.js 26.11.1).
+ */
+const LONGEST_TIMER_MS = 2_147_483_647;
+
+/**
  * HTTP whitespace at either end of a header value: fetch strips it before it checks the value (undici 8.11.2,
  * `lib/web/fetch/headers.js`).
  */
@@ -151,7 +157,10 @@ export interface PostOptions<T> {
 }
 
 export interface PagesOptions<T> {
-  /** A wait on the clock between two pages, with nothing in flight during it. */
+  /**
+   * A wait on the clock between two pages, with nothing in flight during it: a finite number of milliseconds from 0
+   * (no wait, the default) to 2147483647, the longest a timer waits.
+   */
   pauseMs?: number;
   /** Types each entry; a failure is the `api` kind naming the field. */
   schema?: ZodType<T>;
@@ -448,7 +457,8 @@ export class GripClient {
    * The pages of a list: `page=1`, `page=2`, ... ahead of the same query, each entry of each non-empty
    * `data` array in order, until the first request whose `data` is empty; that request is the
    * final one. Never two pages in flight; `pauseMs` waits on the clock between pages with nothing
-   * in flight. No page-size parameter is ever sent (`docs/api/attendees.md` § Directory search).
+   * in flight, and one that is not a finite number from 0 to `LONGEST_TIMER_MS` is refused before the first request.
+   * No page-size parameter is ever sent (`docs/api/attendees.md` § Directory search).
    */
   async *pages<T = unknown>(path: string, query: Query, options: PagesOptions<T> = {}): AsyncIterable<T> {
     // The query and the options as they stand when iteration starts: every page is built from this copy, whatever
@@ -458,6 +468,11 @@ export class GripClient {
     const fixedQuery: Query = { ...query };
     delete fixedQuery["page"];
     const { pauseMs = 0, schema } = options;
+    if (!Number.isFinite(pauseMs) || pauseMs < 0 || pauseMs > LONGEST_TIMER_MS) {
+      throw new TypeError(
+        `GripClient: pauseMs is a wait in milliseconds from 0 to ${String(LONGEST_TIMER_MS)}, the longest a timer waits: ${String(pauseMs)}`,
+      );
+    }
     for (let page = 1; ; page += 1) {
       if (page > 1 && pauseMs > 0) await this.#clock.sleep(pauseMs);
       const spec: RequestSpec = {
