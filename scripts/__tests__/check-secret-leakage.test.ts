@@ -63,7 +63,15 @@ function shapedFiles(secrets: Secrets): Record<string, string> {
     "basic-alone.txt": `Authorization: Basic ${secrets.basic}\n`,
     "general-token-json.txt": `{"application": {"general": {"application_id": 1, "token": "${secrets.applicationToken}"}}}\n`,
     "general-token-dotted.txt": `general.token: ${secrets.applicationToken}\n`,
+    // A pretty-printed config answer: the `"general"` key sits two lines above the token, so only a match over the
+    // whole file catches it.
+    "general-token-pretty.json": `${prettyConfigAnswer(secrets.applicationToken)}\n`,
   };
+}
+
+/** The config answer as a capture pretty-prints it, one key per line (docs/api/containers.md § Fields of a 200 answer). */
+function prettyConfigAnswer(applicationToken: string): string {
+  return JSON.stringify({ application: { general: { application_id: 1, token: applicationToken } } }, null, 2);
 }
 
 /**
@@ -205,6 +213,21 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
 
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
+  });
+
+  it("R20: matches over the whole file, so a pretty-printed answer whose key context sits on an earlier line than the token is flagged, at the line the match starts on", () => {
+    const secrets = fixtureSecrets();
+    // Line 1 `{`, line 2 `"application": {`, line 3 `"general": {`, line 4 `"application_id": 1`, line 5 the token.
+    write("fixtures/config-answer.json", `${prettyConfigAnswer(secrets.applicationToken)}\n`);
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value:"));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatch(/^fixtures\/config-answer\.json:3: secret-shaped value: /);
+    expect(result.stderr).not.toContain(secrets.applicationToken);
   });
 
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {

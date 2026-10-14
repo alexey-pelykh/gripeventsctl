@@ -6,9 +6,12 @@
  * Secret-leakage guard.
  *
  * Scans every tracked file for the secret shapes GripEventsCtl handles (a Grip session token in
- * its header or JSON-key context, and a JWT-shaped chat token) and fails when one is found. A
- * match in tracked source is almost certainly a leak: a token that landed in a fixture, a snapshot
- * or a captured response during local development.
+ * its header or JSON-key context, a JWT-shaped chat token, the login `Authorization` value, a
+ * `Basic` value, the application token and the `grip_cdp_token` in their key contexts) and fails
+ * when one is found. A match in tracked source is almost certainly a leak: a token that landed in
+ * a fixture, a snapshot or a captured response during local development. Each file is matched as
+ * a whole, not line by line, so a pretty-printed capture whose key context sits on an earlier line
+ * than the value is caught too; a finding is reported at the line its match starts on.
  *
  * The patterns live ONCE, in `packages/core/src/lib/redact.ts`, and are consumed by both this
  * lint-time check and the runtime redaction path. Extending either side means extending
@@ -101,19 +104,32 @@ function scanFile(filePath: string): Finding[] {
 
   const patterns = SECRET_PATTERN_SOURCES.map((source) => new RegExp(source, "gi"));
   const findings: Finding[] = [];
-  const lines = content.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    for (const pattern of patterns) {
-      pattern.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(line)) !== null) {
-        // Report the shape, never the value: the value is what must not reach a log.
-        findings.push({ line: i + 1, match: `${match[0].slice(0, 12)}… (${String(match[0].length)} chars)` });
-      }
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(content)) !== null) {
+      // Every pattern matches at least one character; the guard keeps an empty match from looping forever.
+      if (match[0].length === 0) pattern.lastIndex += 1;
+      // Report the shape, never the value: the value is what must not reach a log. A match may span lines, so the
+      // printed prefix collapses whitespace runs to one space and stays at most 12 characters.
+      const prefix = match[0].slice(0, 12).replace(/\s+/g, " ");
+      findings.push({ line: lineOf(content, match.index), match: `${prefix}… (${String(match[0].length)} chars)` });
     }
   }
-  return findings;
+  return findings.sort((a, b) => a.line - b.line);
+}
+
+/** The 1-based line `offset` falls on: one more than the number of newlines before it. */
+function lineOf(content: string, offset: number): number {
+  let line = 1;
+  for (
+    let newline = content.indexOf("\n");
+    newline !== -1 && newline < offset;
+    newline = content.indexOf("\n", newline + 1)
+  ) {
+    line += 1;
+  }
+  return line;
 }
 
 function main(): void {
