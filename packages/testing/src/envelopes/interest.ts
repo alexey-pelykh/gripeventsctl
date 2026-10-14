@@ -52,7 +52,8 @@ export function modePhaseAnswer(statusCode = 200): GripReply {
 
 /**
  * docs/api/interest.md § Errors the app matches on: HTTP 409 with an `error.data` array, read from the app code and
- * never seen live; where the array sits on the wire is not verified (docs/api/not-verified.md § Match answers).
+ * never seen live; where the array sits on the wire is not verified (docs/api/not-verified.md § Match answers
+ * (interest, strong interest, skip)).
  */
 export function conflict409(details: string[]): GripReply {
   return jsonReply(409, { error: { data: details } });
@@ -61,7 +62,8 @@ export function conflict409(details: string[]): GripReply {
 /**
  * docs/api/interest.md § Errors the app matches on, the other shape the 409 may take on the wire: the array as the
  * envelope's own `data` (`{"success":false,"data":[...]}`), which the app's HTTP client may hand its code as
- * `error.data`. Not seen live either (docs/api/not-verified.md § Match answers); the client accepts both shapes.
+ * `error.data`. Not seen live either (docs/api/not-verified.md § Match answers (interest, strong interest, skip)); the
+ * client accepts both shapes.
  */
 export function conflict409InData(details: string[]): GripReply {
   return jsonReply(409, { success: false, data: details });
