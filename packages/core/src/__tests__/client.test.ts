@@ -1512,6 +1512,35 @@ describe("[CAP-THROTTLE] AC-09 a Retry-After in HTTP-date form (RFC 9110 § 10.2
   });
 });
 
+describe("[CAP-THROTTLE] AC-22 a Retry-After of zero (issue #5 § The backoff schedule)", () => {
+  it("waits the schedule's first step, 60 s, before the retry: a zero counts as no header", async () => {
+    await withSession(async (home) => {
+      const clock = recordingClock();
+      const stderr = stderrSink();
+      const zero = throttled429();
+      zero.responseOptions.headers["retry-after"] = "0";
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => zero);
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => containerList200());
+      const pending = newClient(home.env, { clock, stderr: stderr.stream }).get("container");
+      try {
+        await waitFor(() => clock.sleeps.length === 1, "the wait after the 429");
+        expect(clock.sleeps).toEqual([60_000]);
+        expect(calls()).toHaveLength(1);
+        expect(stderr.text()).toContain("GET container: 429; waiting 60 s before retry 1 of 3");
+        await clock.advance(60_000);
+        await pending;
+        expect(calls()).toHaveLength(2);
+      } finally {
+        await drain(clock, pending);
+      }
+    });
+  });
+});
+
 describe("[CAP-THROTTLE] the throttled error after the schedule ends", () => {
   it("carries the 429's reason as bodyExcerpt where the answer is the envelope, and the body text where it is not", async () => {
     await withSession(async (home) => {
