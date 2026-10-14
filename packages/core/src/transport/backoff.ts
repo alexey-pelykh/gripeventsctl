@@ -16,8 +16,8 @@ export const RETRY_AFTER_CAP_S = 300;
 
 /**
  * The waits, in seconds, before retry 1, 2 and 3 when the answer carries no `Retry-After`. Frozen, because
- * `readonly` binds at compile time only and the package entry hands this array to every importer: no importer can
- * change the 429 waits at run time.
+ * `readonly` binds at compile time only and every module that imports the schedule shares this one array: no importer
+ * can change the 429 waits at run time.
  */
 export const SCHEDULE_S: readonly number[] = Object.freeze([60, 120, 240]);
 
