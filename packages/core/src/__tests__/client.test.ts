@@ -1030,10 +1030,22 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
     },
     { answer: "a 200 with success: false and no data key", path: "container", status: 200, body: { success: false } },
     {
+      answer: "a 400 whose data is only whitespace, which counts as no reason",
+      path: "container",
+      status: 400,
+      body: { success: false, data: " \t\r\n " },
+    },
+    {
       answer: "a JSON 403 outside the directory search whose data is the empty string",
       path: "container/1/thing/2",
       status: 403,
       body: { success: false, data: "" },
+    },
+    {
+      answer: "a JSON 403 outside the directory search whose data is only whitespace",
+      path: "container/1/thing/2",
+      status: 403,
+      body: { success: false, data: "\n\n" },
     },
   ])(
     "raises api with the status as the hint and no dangling separator when a success: false answer gives no reason: $answer",
@@ -1180,6 +1192,23 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
       expect(again).toBeInstanceOf(AuthFailedError);
       expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T08:12:00Z");
       expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(2);
+      expect(calls()).toHaveLength(2);
+    });
+  });
+
+  it("ends the message at the status when the 401's data is empty or only whitespace, which counts as no reason", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env, { clock: fakeClock("2026-10-13T08:12:00Z") });
+      for (const reason of ["", "  \n"]) {
+        pool()
+          .intercept({ path: "/1/container", method: "GET" })
+          .reply(() => failure(reason, 401));
+        const error = await caught(client.get("container"));
+        expect(error, JSON.stringify(reason)).toBeInstanceOf(AuthFailedError);
+        expect((error as GripError).message, JSON.stringify(reason)).toBe(
+          "GET container: HTTP 401; the session was rejected",
+        );
+      }
       expect(calls()).toHaveLength(2);
     });
   });
@@ -1388,16 +1417,17 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
   it("a 409 whose error.data array gives no text ends its message at the status, with no dangling separator", async () => {
     await withSession(async (home) => {
       const client = newClient(home.env);
-      for (const data of [[], [""]]) {
+      for (const data of [[], [""], ["  "], ["\n", " \t"]]) {
         pool()
           .intercept({ path, method: "POST" })
           .reply(() => jsonReply(409, { success: false, error: { data } }));
         const error = await caught(client.post(relative, { message: "" }));
-        expect(error).toBeInstanceOf(ConflictError);
+        expect(error, JSON.stringify(data)).toBeInstanceOf(ConflictError);
         const conflictError = error as ConflictError;
-        expect(conflictError.message).toBe(`POST ${relative}: HTTP 409`);
+        expect(conflictError.message, JSON.stringify(data)).toBe(`POST ${relative}: HTTP 409`);
         expect(conflictError.details).toEqual(data);
-        expect(conflictError.hint).toBe("");
+        // An array that holds no text gives no reason: the hint is the status (issue #5, the 409 row).
+        expect(conflictError.hint, JSON.stringify(data)).toBe("HTTP 409");
         expect(conflictError.status).toBe(409);
       }
       pool()
@@ -1405,7 +1435,7 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
         .reply(() => conflict409(["x", "y"]));
       const named = await caught(client.post(relative, { message: "" }));
       expect((named as GripError).message).toBe(`POST ${relative}: HTTP 409: x; y`);
-      expect(calls()).toHaveLength(3);
+      expect(calls()).toHaveLength(5);
     });
   });
 
@@ -1426,8 +1456,8 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
         expect(conflictError.message).toBe(`POST ${relative}: HTTP 409`);
         expect(conflictError.details).toEqual(data);
         expect(conflictError.status).toBe(409);
-        // The hint and the excerpt stay as they were: what a 409 with no text hints is the spec owner's call.
-        expect(conflictError.hint).toBe(data.join("; "));
+        // The hint is the status where the array gives no text (issue #5, the 409 row); the excerpt stays the joined array.
+        expect(conflictError.hint).toBe("HTTP 409");
         expect(conflictError.bodyExcerpt).toBe(data.join("; "));
       }
       // One entry with text keeps the message as it was, the empty entries included.
