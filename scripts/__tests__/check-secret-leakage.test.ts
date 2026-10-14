@@ -134,7 +134,7 @@ afterEach(() => {
 });
 
 describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () => {
-  it("R15: finds a committed fixture secret of each shape, one finding per file, and exits 1", () => {
+  it("R15: flags every fixture file and no placeholder file, and exits 1", () => {
     const secrets = fixtureSecrets();
     const files = shapedFiles(secrets);
     for (const [name, content] of Object.entries(files)) write(`fixtures/${name}`, content);

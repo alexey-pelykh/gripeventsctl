@@ -11,10 +11,11 @@ import {
   UNKNOWN_SLUG_REASON,
   configLookupSchema,
   conflictDetails,
+  dataText,
+  envelopeOf,
   gatedThingId,
   isGatedTypeReason,
   loginAnswerSchema,
-  parseEnvelope,
   parseJson,
   schemaFailureMessage,
 } from "../transport/envelope.js";
@@ -32,13 +33,39 @@ function configData(applicationToken: string): Record<string, unknown> {
 
 describe("[CAP-CLIENT] the envelope (docs/api/README.md § Response envelope)", () => {
   it("parses { success, data } and returns undefined for anything else", () => {
-    expect(parseEnvelope('{"success":true,"data":[1,2]}')).toEqual({ success: true, data: [1, 2] });
-    expect(parseEnvelope('{"success":false,"data":"reason 1"}')).toEqual({ success: false, data: "reason 1" });
-    expect(parseEnvelope('{"success":true}')).toEqual({ success: true, data: undefined });
-    expect(parseEnvelope('{"error":{"data":["x"]}}')).toBeUndefined();
-    expect(parseEnvelope("<html><body>Forbidden</body></html>")).toBeUndefined();
-    expect(parseEnvelope("")).toBeUndefined();
-    expect(parseEnvelope('"a string"')).toBeUndefined();
+    expect(envelopeOf(parseJson('{"success":true,"data":[1,2]}'))).toEqual({ success: true, data: [1, 2] });
+    expect(envelopeOf(parseJson('{"success":false,"data":"reason 1"}'))).toEqual({ success: false, data: "reason 1" });
+    expect(envelopeOf(parseJson('{"success":true}'))).toEqual({ success: true, data: undefined });
+    expect(envelopeOf(parseJson('{"error":{"data":["x"]}}'))).toBeUndefined();
+    expect(envelopeOf(parseJson("<html><body>Forbidden</body></html>"))).toBeUndefined();
+    expect(envelopeOf(parseJson(""))).toBeUndefined();
+    expect(envelopeOf(parseJson('"a string"'))).toBeUndefined();
+  });
+
+  it("envelopeOf reads the envelope from a body already parsed and returns undefined for anything else", () => {
+    expect(envelopeOf({ success: true, data: [1, 2] })).toEqual({ success: true, data: [1, 2] });
+    expect(envelopeOf({ success: false })).toEqual({ success: false, data: undefined });
+    const notEnvelopes: [string, unknown][] = [
+      ["undefined", undefined],
+      ["null", null],
+      ["a string", "a string"],
+      ["a number", 1],
+      ["an array", [{ success: true, data: 1 }]],
+      ["the 409 body", { error: { data: ["x"] } }],
+    ];
+    for (const [label, body] of notEnvelopes) expect(envelopeOf(body), label).toBeUndefined();
+  });
+
+  it("dataText gives a string as it is, anything else as JSON, and a placeholder for a value JSON cannot serialise", () => {
+    expect(dataText("reason 1")).toBe("reason 1");
+    expect(dataText(undefined)).toBe("");
+    expect(dataText({ a: [1] })).toBe('{"a":[1]}');
+    // The catch is reachable from an answer: on Node 22 and 24, a `data` nested millions of levels deep (a body under
+    // the 16 MiB cap) makes `JSON.stringify` throw `RangeError`. A BigInt and a cycle throw on every Node version.
+    const cyclic: Record<string, unknown> = {};
+    cyclic["self"] = cyclic;
+    expect(dataText(10n)).toBe("[a value that cannot be serialised]");
+    expect(dataText(cyclic)).toBe("[a value that cannot be serialised]");
   });
 
   it("parseJson returns undefined, never throws, on a body that is not JSON", () => {

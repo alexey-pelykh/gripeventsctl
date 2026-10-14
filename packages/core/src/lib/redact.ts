@@ -35,6 +35,11 @@
  * angle-bracket placeholder (`<user_token>`) or a template literal (`${token}`) never matches: the
  * `docs/api/` pages and the test sources stay clean under the lint.
  *
+ * Every pattern takes time linear in its input and never throws on one: an error redacts a whole
+ * answer body, up to the client's 16 MiB cap, before it cuts the excerpt (`transport/errors.ts`). So
+ * a repeated value character is spelt `X{n}X*` (see `atLeast`), and the chat-token pattern starts a
+ * match only at the first `eyJ` of its run (see `JWT_PATTERN_SOURCE`).
+ *
  * The live-secret registry holds, in memory only, the secret values this process has handled (the
  * session token once it is resolved from the config, the output of the 1Password CLI, the tokens
  * the transport parses, the `Basic` value it builds, and the password the sign-in command reads).
@@ -48,17 +53,52 @@ export const UUID_PATTERN_SOURCE = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4
 export const SESSION_TOKEN_PATTERN_SOURCE =
   String.raw`(user_token|x-authorization)(["']?\s*[:=]\s*["']?)(` + UUID_PATTERN_SOURCE + ")";
 
-export const JWT_PATTERN_SOURCE = String.raw`eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`;
+/**
+ * At least `count` of the one-character class `characterClass`, as `X{count}X*`. `X{count,}` matches
+ * the same strings, but V8 keeps one backtrack entry per character for it and threw `RangeError` on a
+ * single run of 8 Mi characters (Node 26.11.1, 2026-10-14), while it runs `X*` without them; a body
+ * under the client's 16 MiB cap can hold such a run after a scheme word or a key.
+ */
+function atLeast(characterClass: string, count: number): string {
+  return `${characterClass}{${String(count)}}${characterClass}*`;
+}
+
+/** One character of a base64url value, the alphabet of a JWT's three parts. */
+const BASE64URL_CHARACTER_SOURCE = "[A-Za-z0-9_-]";
+
+/**
+ * A JWT: `eyJ`, then three base64url runs of at least 10 characters joined by dots (the first run
+ * begins with the `eyJ`). The lookbehind after `eyJ` walks back, lazily, to the start of the base64url
+ * run and fails at an earlier `eyJ`, so a match starts only at the first `eyJ` of its run. That is
+ * where the plain pattern starts too: a later `eyJ` in the same run leaves a shorter first part and the
+ * same two runs after it, so it never matches where the first does not. It keeps the work linear:
+ * without it, every `eyJ` of a long run rescanned the run to its end, which took time quadratic in the
+ * run (36 s for 256 KiB of `eyJ`, measured on Node 26.11.1, 2026-10-14).
+ */
+export const JWT_PATTERN_SOURCE =
+  String.raw`eyJ(?<=(?<!${BASE64URL_CHARACTER_SOURCE})(?:(?!eyJ)${BASE64URL_CHARACTER_SOURCE})*?eyJ)` +
+  atLeast(BASE64URL_CHARACTER_SOURCE, 10) +
+  String.raw`\.` +
+  atLeast(BASE64URL_CHARACTER_SOURCE, 10) +
+  String.raw`\.` +
+  atLeast(BASE64URL_CHARACTER_SOURCE, 10);
 
 /** One character of a token value: no whitespace, no quote, no comma, no brace, and none of `$`, `<`. */
 const TOKEN_CHARACTER_SOURCE = String.raw`[^\s"',$<{}]`;
 
 /** A base64 value of at least 16 characters, with optional padding. */
-const BASE64_VALUE_SOURCE = String.raw`[A-Za-z0-9+/]{16,}={0,2}`;
+const BASE64_VALUE_SOURCE = `${atLeast("[A-Za-z0-9+/]", 16)}={0,2}`;
 
-/** The login `Authorization` value: `Bearer <token>, Basic <base64>`. Groups: scheme, token, separator with scheme, base64. */
+/**
+ * The login `Authorization` value: `Bearer <token>, Basic <base64>`. Groups: scheme, token, separator with scheme,
+ * base64.
+ */
 export const LOGIN_AUTHORIZATION_PATTERN_SOURCE =
-  String.raw`(Bearer\s+)(` + TOKEN_CHARACTER_SOURCE + String.raw`{8,})(,\s*Basic\s+)(` + BASE64_VALUE_SOURCE + ")";
+  String.raw`(Bearer\s+)(` +
+  atLeast(TOKEN_CHARACTER_SOURCE, 8) +
+  String.raw`)(,\s*Basic\s+)(` +
+  BASE64_VALUE_SOURCE +
+  ")";
 
 /**
  * A base64 value that is not a plain word: the lookahead requires the run to hold a digit, `+`, `/`
@@ -75,23 +115,30 @@ export const BASIC_PATTERN_SOURCE = String.raw`(\bBasic\s+)(` + NON_WORD_BASE64_
 /** The application token in its key context. Groups: key context, separator, token. */
 export const APPLICATION_TOKEN_PATTERN_SOURCE =
   String.raw`(general\.token|"general"\s*:\s*\{[^{}]*?"token")(["']?\s*[:=]\s*["']?)(` +
-  TOKEN_CHARACTER_SOURCE +
-  String.raw`{8,})`;
+  atLeast(TOKEN_CHARACTER_SOURCE, 8) +
+  ")";
 
-/** A bare `Bearer <token>` value. Groups: scheme, token. Run time only: the docs print the public bootstrap bearer this way. */
-export const BEARER_PATTERN_SOURCE = String.raw`(\bBearer\s+)(` + TOKEN_CHARACTER_SOURCE + String.raw`{16,})`;
+/**
+ * A bare `Bearer <token>` value. Groups: scheme, token. Run time only: the docs print the public bootstrap bearer this
+ * way.
+ */
+export const BEARER_PATTERN_SOURCE = String.raw`(\bBearer\s+)(` + atLeast(TOKEN_CHARACTER_SOURCE, 16) + ")";
 
-/** The shapes the lint (`scripts/check-secret-leakage.ts`) and `redactString` both apply. */
-export const SECRET_PATTERN_SOURCES: readonly string[] = [
+/**
+ * The shapes the lint (`scripts/check-secret-leakage.ts`) and `redactString` both apply. Frozen, like
+ * `RUNTIME_ONLY_PATTERN_SOURCES`, because `readonly` binds at compile time only: the lint reads this list when it runs,
+ * and the package entry hands both lists to every importer, so no importer can change what they match.
+ */
+export const SECRET_PATTERN_SOURCES: readonly string[] = Object.freeze([
   SESSION_TOKEN_PATTERN_SOURCE,
   JWT_PATTERN_SOURCE,
   LOGIN_AUTHORIZATION_PATTERN_SOURCE,
   BASIC_PATTERN_SOURCE,
   APPLICATION_TOKEN_PATTERN_SOURCE,
-];
+]);
 
-/** The shapes `redactString` applies and the lint never does. */
-export const RUNTIME_ONLY_PATTERN_SOURCES: readonly string[] = [BEARER_PATTERN_SOURCE];
+/** The shapes `redactString` applies and the lint never does. Frozen, like `SECRET_PATTERN_SOURCES`. */
+export const RUNTIME_ONLY_PATTERN_SOURCES: readonly string[] = Object.freeze([BEARER_PATTERN_SOURCE]);
 
 export const REDACTED = "<REDACTED>";
 

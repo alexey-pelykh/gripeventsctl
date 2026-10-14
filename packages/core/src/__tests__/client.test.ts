@@ -7,7 +7,8 @@
  * `@gripeventsctl/testing`; nothing reaches the network. Time runs on the manual clock.
  */
 
-import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -43,11 +44,14 @@ import {
   throttled429,
   withTempHome,
 } from "@gripeventsctl/testing";
+import ts from "typescript";
 import { Dispatcher, type MockAgent } from "undici";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { loadConfig, recordAuthFailure, saveConfig } from "../config/store.js";
+import type { Config } from "../config/schema.js";
+import { loadConfig, recordAuthFailure, saveConfig, saveSession } from "../config/store.js";
+import * as core from "../index.js";
 import { REDACTED, redactString, registerSecret } from "../lib/redact.js";
 import { SCHEDULE_S } from "../transport/backoff.js";
 import {
@@ -59,6 +63,7 @@ import {
   isProfilePath,
   privateStateForTest,
 } from "../transport/client.js";
+import { missingFieldMessage } from "../transport/envelope.js";
 import {
   ApiError,
   AuthFailedError,
@@ -88,12 +93,36 @@ vi.mock("../config/store.js", async (importOriginal) => {
 });
 const recordAuthFailureMock = vi.mocked(recordAuthFailure);
 
+/** The interest write path several cases send, relative to `BASE_URL`, and as it reaches the wire. */
+const WRITE_PATH = "container/1/thing/user_id/match_manual/yes/to_thing/2";
+const WRITE_WIRE_PATH = `/1/${WRITE_PATH}`;
+
 const CLIENT_SOURCE = fileURLToPath(new URL("../transport/client.ts", import.meta.url));
 const HEADERS_SOURCE = fileURLToPath(new URL("../transport/headers.ts", import.meta.url));
 const ENVELOPE_SOURCE = fileURLToPath(new URL("../transport/envelope.ts", import.meta.url));
 const BACKOFF_SOURCE = fileURLToPath(new URL("../transport/backoff.ts", import.meta.url));
-/** The whole backoff schedule in milliseconds: advancing a fake clock by this much fires every wait a request can hold. */
+/**
+ * The whole backoff schedule in milliseconds: advancing a fake clock by this much fires every wait a request can hold.
+ */
 const WHOLE_SCHEDULE_MS = SCHEDULE_S.reduce((sum, step) => sum + step, 0) * 1000 + REQUEST_TIMEOUT_MS;
+
+/** The fourteen kinds, in the order the AC-15 case builds one error of each class; the surface case reuses it. */
+const FOURTEEN_KINDS = [
+  "api",
+  "network",
+  "auth-failed",
+  "throttled",
+  "swipe-cap",
+  "gated-type",
+  "load-balancer-rejected",
+  "unknown-slug",
+  "mode-phase",
+  "conflict",
+  "usage",
+  "write-refused",
+  "config",
+  "no-session",
+] as const;
 
 type CallLog = ReturnType<NonNullable<ReturnType<MockAgent["getCallHistory"]>>["calls"]>[number];
 
@@ -154,23 +183,20 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
+/** The version-1 config the config item writes after a sign-in: one session holding `token`, writes off. */
+function sessionConfig(token: string): Config {
+  return {
+    version: 1,
+    session: { slug: "testevent", container_id: 1, token, signed_in_at: "2026-10-12T11:00:00Z" },
+    writes: { enabled: false },
+  };
+}
+
 /** A fresh temporary home holding a version-1 config with one session, as the config item writes it. */
 function withSession<T>(fn: (home: TempHome, secrets: FixtureSecrets) => Promise<T>): Promise<T> {
   return withTempHome(async (home) => {
     const secrets = fixtureSecrets();
-    await saveConfig(
-      {
-        version: 1,
-        session: {
-          slug: "testevent",
-          container_id: 1,
-          token: secrets.sessionToken,
-          signed_in_at: "2026-10-12T11:00:00Z",
-        },
-        writes: { enabled: false },
-      },
-      { env: home.env },
-    );
+    await saveConfig(sessionConfig(secrets.sessionToken), { env: home.env });
     return fn(home, secrets);
   });
 }
@@ -184,16 +210,23 @@ function newClient(env: NodeJS.ProcessEnv, options: { clock?: Clock; stderr?: Wr
   });
 }
 
-/** The manual clock, recording every sleep the subject asks for. */
-function recordingClock(): FakeClock & { sleeps: number[] } {
+/** The manual clock, recording every sleep the subject asks for and counting the sleeps not yet over. */
+function recordingClock(): FakeClock & { sleeps: number[]; waiting: () => number } {
   const clock = fakeClock();
   const sleeps: number[] = [];
+  let waiting = 0;
   return {
     ...clock,
     sleeps,
-    sleep: (ms) => {
+    waiting: () => waiting,
+    sleep: async (ms) => {
       sleeps.push(ms);
-      return clock.sleep(ms);
+      waiting += 1;
+      try {
+        await clock.sleep(ms);
+      } finally {
+        waiting -= 1;
+      }
     },
   };
 }
@@ -203,21 +236,53 @@ function recordingClock(): FakeClock & { sleeps: number[] } {
  * has settled, firing the waits it registers one after another (a backoff sleep, then the next attempt's timeout
  * or spacing sleep). A case that holds the queue and fails before releasing it would otherwise strand every later
  * case behind a queue tail that never settles.
+ *
+ * With a recording clock the clock moves only while the subject sleeps on it, so an attempt still in flight never
+ * has its timeout fired by the drain, however long the reply takes in real time. A clock that cannot say whether
+ * the subject sleeps moves after 250 ms of real time without settling (a stalled body read waits on a timeout,
+ * not a sleep). The drain gives up after 10 s of real time.
  */
-async function drain(clock: FakeClock, ...pending: Promise<unknown>[]): Promise<void> {
+async function drain(clock: FakeClock & { waiting?: () => number }, ...pending: Promise<unknown>[]): Promise<void> {
   let settled = false;
   const all = Promise.allSettled(pending).then(() => {
     settled = true;
   });
-  for (let round = 0; round < 12 && !settled; round += 1) {
-    await clock.advance(WHOLE_SCHEDULE_MS);
-    await settle();
+  const deadline = Date.now() + 10_000;
+  let movedAt = Date.now();
+  while (!settled) {
+    if (Date.now() > deadline) throw new Error("the queue could not be drained: a request still waits after 10 s");
+    const sleeping = clock.waiting === undefined ? Date.now() - movedAt > 250 : clock.waiting() > 0;
+    if (sleeping) {
+      await clock.advance(WHOLE_SCHEDULE_MS);
+      movedAt = Date.now();
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 1));
   }
-  if (!settled) throw new Error("the queue could not be drained: a request still waits on the clock after 12 rounds");
   await all;
 }
 
 const CONFIG_ANSWER = { slug: "test-event-1", displayName: "Test Event 1" };
+
+/**
+ * The private fields `class GripClient` declares, read from client.ts with TypeScript's own parser, so no layout of the
+ * source hides one: every `#name` property declared on the class body, `readonly` or not, with or without an
+ * initializer. Never a `#method()`, a `static #` member, or a `this.#name` use.
+ */
+async function declaredPrivateFields(): Promise<string[]> {
+  const source = ts.createSourceFile(CLIENT_SOURCE, await readFile(CLIENT_SOURCE, "utf8"), ts.ScriptTarget.Latest);
+  const declared: string[] = [];
+  for (const statement of source.statements) {
+    if (!ts.isClassDeclaration(statement) || statement.name?.text !== "GripClient") continue;
+    for (const member of statement.members) {
+      const modifiers = ts.canHaveModifiers(member) ? ts.getModifiers(member) : undefined;
+      const isStatic = (modifiers ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
+      if (ts.isPropertyDeclaration(member) && ts.isPrivateIdentifier(member.name) && !isStatic) {
+        declared.push(member.name.text.slice(1));
+      }
+    }
+  }
+  return declared.sort();
+}
 
 beforeEach(() => {
   agent.clearCallHistory();
@@ -243,7 +308,7 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
         .intercept({ path: "/1/user/account/login", method: "POST" })
         .reply(() => login200({ sessionToken: secrets.sessionToken, chatToken: secrets.chatToken }));
       pool()
-        .intercept({ path: "/1/container/1/thing/user_id/match_manual/yes/to_thing/2", method: "POST" })
+        .intercept({ path: WRITE_WIRE_PATH, method: "POST" })
         .reply(() => matchAnswer201());
       const client = newClient(env);
 
@@ -255,7 +320,7 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
         email: secrets.email,
         password: secrets.password,
       });
-      await client.post("container/1/thing/user_id/match_manual/yes/to_thing/2", { message: "" });
+      await client.post(WRITE_PATH, { message: "" });
 
       expect(calls()).toHaveLength(4);
       for (const call of calls()) {
@@ -330,6 +395,76 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
     });
   });
 
+  it("refuses, before any request, a path the URL parser would send in another form, so the per-path rules read what is sent", async () => {
+    await withSession(async (home) => {
+      const clock = recordingClock();
+      const stderr = stderrSink();
+      pool()
+        .intercept({ path: "/1/container/1/thing/5", method: "GET" })
+        .reply(() => profile200(5));
+      const client = newClient(home.env, { clock, stderr: stderr.stream });
+      expect((await client.get<{ id: number }>("container/1/thing/5")).id).toBe(5);
+
+      // A profile read spelt with a "." segment would leave unspaced; a search spelt so would escape the gated-type rule.
+      const respelt = [
+        "container/1/thing/./6",
+        "container/1/thing/6/.",
+        " container/1/thing/6 ",
+        "container/1/thing/6#frag",
+        "container\\1\\thing\\6",
+        "container/1/./search/",
+        "./container/1/search/",
+        "container/1/search/#x",
+        "container/1/thing/%2e/6",
+      ];
+      for (const path of respelt) {
+        const error = await caught(client.get(path, { query: { sort: "name" } }));
+        expect(error, JSON.stringify(path)).toBeInstanceOf(TypeError);
+        expect((error as Error).message, JSON.stringify(path)).toContain(JSON.stringify(path));
+      }
+      expect(calls().map((call) => call.path)).toEqual(["/1/container/1/thing/5"]);
+      expect(clock.sleeps).toEqual([]);
+      expect(stderr.text()).toBe("GET container/1/thing/5: 200\n");
+    });
+  });
+
+  it("refuses a path holding a control character before any request, so no diagnostic line is split or forged", async () => {
+    await withSession(async (home) => {
+      const stderr = stderrSink();
+      const client = newClient(home.env, { stderr: stderr.stream });
+      const forged = [
+        "container/1\r\nGET /thing/5: 200",
+        "container/1\n/thing/5",
+        "container/1/thing/5\t",
+        "container?search=a\nGET container: 200",
+        "container/1\u0000/thing/5",
+        "container/1\u001b[2K/thing/5",
+        "container/1\u007f/thing/5",
+        "container?search=a\u0085GET container: 200",
+        "container?search=a\u2028GET container: 200",
+      ];
+      // Every character that splits a line or rewrites one in a terminal or a log reader.
+      const breaking = (text: string): number[] =>
+        Array.from(text, (character) => character.charCodeAt(0)).filter(
+          (code) => code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029,
+        );
+      for (const path of forged) {
+        const label = JSON.stringify(path).replaceAll("\u007f", "\\u007f");
+        expect(breaking(path), label).not.toEqual([]);
+        const error = await caught(client.get(path));
+        expect(error, label).toBeInstanceOf(TypeError);
+        // The refusal quotes the path with each of them escaped, DEL and the C1 range included.
+        expect(breaking((error as Error).message), label).toEqual([]);
+      }
+      // A path that leaves the base is quoted the same way.
+      const leaving = await caught(client.get("/container\u007f"));
+      expect(leaving).toBeInstanceOf(TypeError);
+      expect((leaving as Error).message).toContain('"/container\\u007f"');
+      expect(calls()).toHaveLength(0);
+      expect(stderr.text()).toBe("");
+    });
+  });
+
   it("sets no TLS option and reads no origin from the process environment, in dot, bracket or destructured form", async () => {
     for (const file of [CLIENT_SOURCE, HEADERS_SOURCE, ENVELOPE_SOURCE, BACKOFF_SOURCE]) {
       const source = await readFile(file, "utf8");
@@ -368,12 +503,12 @@ describe("[CAP-CLIENT] AC-02 the header set on authenticated calls", () => {
         .intercept({ path: "/1/container", method: "GET" })
         .reply(() => containerList200());
       pool()
-        .intercept({ path: "/1/container/1/thing/user_id/match_manual/yes/to_thing/2", method: "POST" })
+        .intercept({ path: WRITE_WIRE_PATH, method: "POST" })
         .reply(() => matchAnswer201());
       const client = newClient(home.env);
 
       await client.get("container");
-      await client.post("container/1/thing/user_id/match_manual/yes/to_thing/2", { message: "synthetic message 1" });
+      await client.post(WRITE_PATH, { message: "synthetic message 1" });
 
       const [get, post] = calls();
       if (get === undefined || post === undefined) throw new Error("two requests were expected");
@@ -416,6 +551,30 @@ describe("[CAP-CLIENT] AC-02 the header set on authenticated calls", () => {
     });
   });
 
+  it("names the config path it read, and whether a file was there, when the config holds no session", async () => {
+    await withTempHome(async (home) => {
+      const missing = join(home.dir, "never-written.yaml");
+      const absent = await caught(newClient({ ...home.env, GRIPEVENTSCTL_CONFIG_FILE: missing }).get("container"));
+      expect(absent).toBeInstanceOf(NoSessionError);
+      expect((absent as GripError).kind).toBe("no-session");
+      expect((absent as GripError).message).toBe(`no session: no config file at ${missing}`);
+      expect((absent as GripError).hint).toBe("gripeventsctl auth signin <slug>");
+
+      const sessionless = join(home.dir, "without-a-session.yaml");
+      await saveConfig(
+        { version: 1, writes: { enabled: false } },
+        { env: { ...home.env, GRIPEVENTSCTL_CONFIG_FILE: sessionless } },
+      );
+      const empty = await caught(newClient({ ...home.env, GRIPEVENTSCTL_CONFIG_FILE: sessionless }).get("container"));
+      expect(empty).toBeInstanceOf(NoSessionError);
+      expect((empty as GripError).message).toBe(`no session in ${sessionless}`);
+      expect((empty as GripError).hint).toBe("gripeventsctl auth signin <slug>");
+      expect(calls()).toHaveLength(0);
+    });
+    // The store raises the same class without a path, as before.
+    expect(new NoSessionError().message).toBe("no session");
+  });
+
   it("resolves the session token once per client and reports a broken config as the config kind", async () => {
     await withSession(async (home, secrets) => {
       pool()
@@ -435,11 +594,8 @@ describe("[CAP-CLIENT] AC-02 the header set on authenticated calls", () => {
       expect(await caught(fresh.get("container"))).toBeInstanceOf(NoSessionError);
       await saveConfig({ version: 1, writes: { enabled: false } }, { env: home.env });
       const brokenEnv = { ...home.env, GRIPEVENTSCTL_CONFIG_FILE: `${home.configFile}.missing-dir/x.yaml` };
-      await import("node:fs/promises").then((fs) =>
-        fs
-          .mkdir(`${home.configFile}.missing-dir`)
-          .then(() => fs.writeFile(`${home.configFile}.missing-dir/x.yaml`, "version: 2\n", { mode: 0o600 })),
-      );
+      await mkdir(`${home.configFile}.missing-dir`);
+      await writeFile(`${home.configFile}.missing-dir/x.yaml`, "version: 2\n", { mode: 0o600 });
       expect(await caught(newClient(brokenEnv).get("container"))).toBeInstanceOf(ConfigError);
       expect(calls()).toHaveLength(2);
     });
@@ -569,13 +725,15 @@ describe("[CAP-CLIENT] AC-04 the login call (docs/api/login.md § Request, § Re
       expect(Object.getOwnPropertySymbols(client)).toEqual([]);
       expect(JSON.stringify(client)).toBe("{}");
 
-      // The private fields, by name: exactly the five the class declares, so a new field cannot arrive unasserted,
-      // and none holds the Basic value or the password. The injected dispatcher is the test's own mock, whose call
-      // history recorded the login request; that record is cleared first, because it is the harness's, not a value
-      // the client keeps.
+      // The private fields, by name: exactly the ones the class declares, read from its source, so a field added later
+      // and left off the test seam fails here; and none holds the Basic value or the password. The injected dispatcher
+      // is the test's own mock, whose call history recorded the login request; that record is cleared first, because
+      // it is the harness's, not a value the client keeps.
       agent.clearCallHistory();
       const state = privateStateForTest(client);
-      expect(Object.keys(state).sort()).toEqual(["clock", "dispatcher", "env", "stderr", "token"]);
+      const declared = await declaredPrivateFields();
+      expect(declared, "the parser found the class's private fields").toContain("token");
+      expect(Object.keys(state).sort()).toEqual(declared);
       expect(state["token"]).toBeUndefined();
       const serialise = (value: unknown): string => {
         let json: string;
@@ -651,7 +809,7 @@ describe("[CAP-CLIENT] AC-05 the Basic scheme travels on the login request only"
         .intercept({ path: "/1/container", method: "GET" })
         .reply(() => containerList200());
       pool()
-        .intercept({ path: "/1/container/1/thing/user_id/match_manual/yes/to_thing/2", method: "POST" })
+        .intercept({ path: WRITE_WIRE_PATH, method: "POST" })
         .reply(() => matchAnswer201());
       pool()
         .intercept({ path: (path) => path.startsWith("/1/container/1/search/?"), method: "GET" })
@@ -667,7 +825,7 @@ describe("[CAP-CLIENT] AC-05 the Basic scheme travels on the login request only"
         password: secrets.password,
       });
       await client.get("container");
-      await client.post("container/1/thing/user_id/match_manual/yes/to_thing/2", { message: "" });
+      await client.post(WRITE_PATH, { message: "" });
       const yielded: unknown[] = [];
       for await (const entry of client.pages("container/1/search/", { sort: "name", type_id: "1" }))
         yielded.push(entry);
@@ -695,7 +853,7 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
         .intercept({ path: "/1/container?search=none", method: "GET" })
         .reply(() => success200([]));
       pool()
-        .intercept({ path: "/1/container/1/thing/user_id/match_manual/yes/to_thing/2", method: "POST" })
+        .intercept({ path: WRITE_WIRE_PATH, method: "POST" })
         .reply(() => matchAnswer201());
       const client = newClient(home.env);
 
@@ -705,7 +863,7 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
       ]);
       expect(await client.get("container", { query: { search: "none" } })).toEqual([]);
       // A 201 is a success too (the match answer).
-      expect(await client.post("container/1/thing/user_id/match_manual/yes/to_thing/2", {})).toEqual({
+      expect(await client.post(WRITE_PATH, {})).toEqual({
         message: "action recorded - swipe message created or updated",
         connection: 0,
       });
@@ -783,9 +941,9 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
       expect(calls()).toHaveLength(1);
 
       pool()
-        .intercept({ path: "/1/container/1/thing/user_id/match_manual/yes/to_thing/2", method: "POST" })
+        .intercept({ path: WRITE_WIRE_PATH, method: "POST" })
         .reply(() => jsonReply(201, { success: true }));
-      const posted = await caught(client.post("container/1/thing/user_id/match_manual/yes/to_thing/2", {}));
+      const posted = await caught(client.post(WRITE_PATH, {}));
       expect(posted).toBeInstanceOf(ApiError);
       expect((posted as GripError).message).toContain(missing);
       expect((posted as GripError).status).toBe(201);
@@ -820,7 +978,8 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
       expect(reasonedError.hint).toBe(long.slice(0, BODY_EXCERPT_LENGTH));
       expect(reasonedError.message).toBe(`GET container: HTTP 400: ${long.slice(0, BODY_EXCERPT_LENGTH)}`);
 
-      // A 403 whose JSON is not a `success: false` envelope: the status is the hint and the body sits only in bodyExcerpt.
+      // A 403 whose JSON is not a `success: false` envelope: the status is the hint and the body sits only in
+      // bodyExcerpt.
       pool()
         .intercept({ path: "/1/container", method: "GET" })
         .reply(() => jsonReply(403, { unexpected: long }));
@@ -836,7 +995,7 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
 
       // A 409 whose error.data items are long: the array stays whole on `details`, message tail and hint are cut.
       const details = ["x".repeat(300), "y".repeat(300)];
-      const relative = "container/1/thing/user_id/match_manual/yes/to_thing/2";
+      const relative = WRITE_PATH;
       pool()
         .intercept({ path: `/1/${relative}`, method: "POST" })
         .reply(() => conflict409(details));
@@ -850,6 +1009,70 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
       );
       expect(conflictError.bodyExcerpt).toHaveLength(BODY_EXCERPT_LENGTH);
       expect(calls()).toHaveLength(3);
+    });
+  });
+
+  it.each([
+    {
+      answer: "a 400 whose data is the empty string",
+      path: "container",
+      status: 400,
+      body: { success: false, data: "" },
+    },
+    { answer: "a 200 with success: false and no data key", path: "container", status: 200, body: { success: false } },
+    {
+      answer: "a JSON 403 outside the directory search whose data is the empty string",
+      path: "container/1/thing/2",
+      status: 403,
+      body: { success: false, data: "" },
+    },
+  ])(
+    "raises api with the status as the hint and no dangling separator when a success: false answer gives no reason: $answer",
+    async ({ path, status, body }) => {
+      // The table's `api` row: the hint is `data` as the reason, "or the status" where the answer gives none.
+      await withSession(async (home) => {
+        pool()
+          .intercept({ path: `/1/${path}`, method: "GET" })
+          .reply(() => jsonReply(status, body));
+        const client = newClient(home.env);
+
+        const error = await caught(client.get(path));
+        expect(error).toBeInstanceOf(ApiError);
+        const gripError = error as GripError;
+        const http = `HTTP ${String(status)}`;
+        expect(gripError.kind).toBe("api");
+        expect(gripError.status).toBe(status);
+        expect(gripError.message).toBe(`GET ${path}: ${http}`);
+        expect(gripError.hint).toBe(http);
+        expect(gripError.bodyExcerpt).toBe(JSON.stringify(body));
+        expect(calls()).toHaveLength(1);
+      });
+    },
+  );
+
+  it("parses each answer body once, on a success answer and on a success: false answer", async () => {
+    await withSession(async (home) => {
+      const ok = success200({ parsedOnce: 1 });
+      const refused = failure("synthetic reason parsed once", 400);
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => ok);
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => refused);
+      const client = newClient(home.env);
+
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        expect(await client.get("container")).toEqual({ parsedOnce: 1 });
+        expect(await caught(client.get("container"))).toBeInstanceOf(ApiError);
+        // Only the calls that parse one of the two answer bodies count: anything else in the worker may parse JSON too.
+        const parsesOf = (body: unknown): number => parse.mock.calls.filter(([text]) => text === body).length;
+        expect({ success: parsesOf(ok.data), failure: parsesOf(refused.data) }).toEqual({ success: 1, failure: 1 });
+      } finally {
+        parse.mockRestore();
+      }
+      expect(calls()).toHaveLength(2);
     });
   });
 });
@@ -948,6 +1171,45 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
     });
   });
 
+  it("records the failure only against the session whose token drew the 401, never against a session signed in since", async () => {
+    await withSession(async (home, secrets) => {
+      const clock = fakeClock("2026-10-13T08:12:00Z");
+      const recordsBefore = recordAuthFailureMock.mock.calls.length;
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => containerList200());
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => failure("synthetic unauthorized 1", 401));
+      const client = newClient(home.env, { clock });
+      await client.get("container");
+
+      // Another process signs in: session B, another token and a later signed_in_at, replaces session A.
+      const other = fixtureSecrets();
+      await saveSession(
+        { slug: "testevent", container_id: 1, token: other.sessionToken },
+        { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
+      );
+      const error = await caught(client.get("container"));
+
+      expect(error).toBeInstanceOf(AuthFailedError);
+      expect((error as GripError).kind).toBe("auth-failed");
+      expect((error as GripError).hint).toBe("gripeventsctl auth signin <slug>");
+      // The client still sent session A's token, once per call, and recorded the 401 once.
+      expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
+        secrets.sessionToken,
+        secrets.sessionToken,
+      ]);
+      expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
+      expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(1);
+      // Session B never failed, so it carries no failure time.
+      const { config } = await loadConfig({ env: home.env });
+      expect(config.session?.token).toBe(other.sessionToken);
+      expect(config.session?.signed_in_at).toBe("2026-10-13T08:00:00Z");
+      expect(config.session?.auth_failed_at).toBeUndefined();
+    });
+  });
+
   it("a 401 on the config lookup is auth-failed with the wire-breakage hint: the bootstrap bearer was refused, nothing is recorded, no login", async () => {
     // With a session in the config file, so a failure wrongly recorded against it would show.
     await withSession(async (home) => {
@@ -1015,9 +1277,44 @@ describe("[CAP-THROTTLE] AC-09 a Retry-After in HTTP-date form (RFC 9110 § 10.2
   });
 });
 
+describe("[CAP-THROTTLE] the throttled error after the schedule ends", () => {
+  it("carries the 429's reason as bodyExcerpt where the answer is the envelope, and the body text where it is not", async () => {
+    await withSession(async (home) => {
+      const answers: [string, () => GripReply, string][] = [
+        ["the documented 429 envelope", () => throttled429(), "Throttling - Maximum sending rate exceeded"],
+        [
+          "a 429 page that is not JSON",
+          () => ({
+            statusCode: 429,
+            data: "<html>Too Many Requests</html>",
+            responseOptions: { headers: { "content-type": "text/html" } },
+          }),
+          "<html>Too Many Requests</html>",
+        ],
+      ];
+      for (const [label, reply, excerpt] of answers) {
+        // Each reply takes 5 ms of real time, so the drain runs while an attempt is still in flight.
+        pool().intercept({ path: "/1/container", method: "GET" }).reply(reply).delay(5).times(4);
+        const clock = recordingClock();
+        const pending = caught(newClient(home.env, { clock }).get("container"));
+        await drain(clock, pending);
+        const error = await pending;
+        expect(error, label).toBeInstanceOf(ThrottledError);
+        const gripError = error as GripError;
+        expect(gripError.bodyExcerpt, label).toBe(excerpt);
+        expect(gripError.kind, label).toBe("throttled");
+        expect(gripError.status, label).toBe(429);
+        expect(gripError.hint, label).toBe("wait and retry later; never a workaround");
+        expect(gripError.message, label).toBe("GET container: HTTP 429 after 3 retries; the platform is throttling");
+      }
+      expect(calls()).toHaveLength(8);
+    });
+  });
+});
+
 describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md § Errors the app matches on)", () => {
-  const path = "/1/container/1/thing/user_id/match_manual/yes/to_thing/2";
-  const relative = "container/1/thing/user_id/match_manual/yes/to_thing/2";
+  const path = WRITE_WIRE_PATH;
+  const relative = WRITE_PATH;
 
   it("swipe-cap, mode-phase and conflict, each from one request", async () => {
     await withSession(async (home) => {
@@ -1056,9 +1353,69 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
     });
   });
 
-  it("the two documented reasons decide the kind on every status but 401, 403 included, each from one request", async () => {
-    // The pages record the body text only, never a status ("none seen live"), so the reason decides the kind
-    // whatever the status, and a cap answered with 403 reaches the write items as swipe-cap, not as api.
+  it("a 409 whose error.data array gives no text ends its message at the status, with no dangling separator", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      for (const data of [[], [""]]) {
+        pool()
+          .intercept({ path, method: "POST" })
+          .reply(() => jsonReply(409, { success: false, error: { data } }));
+        const error = await caught(client.post(relative, { message: "" }));
+        expect(error).toBeInstanceOf(ConflictError);
+        const conflictError = error as ConflictError;
+        expect(conflictError.message).toBe(`POST ${relative}: HTTP 409`);
+        expect(conflictError.details).toEqual(data);
+        expect(conflictError.hint).toBe("");
+        expect(conflictError.status).toBe(409);
+      }
+      pool()
+        .intercept({ path, method: "POST" })
+        .reply(() => conflict409(["x", "y"]));
+      const named = await caught(client.post(relative, { message: "" }));
+      expect((named as GripError).message).toBe(`POST ${relative}: HTTP 409: x; y`);
+      expect(calls()).toHaveLength(3);
+    });
+  });
+
+  it("a 409 whose error.data entries are all the empty string ends its message at the status, however many there are", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      for (const data of [
+        ["", ""],
+        ["", "", ""],
+      ]) {
+        pool()
+          .intercept({ path, method: "POST" })
+          .reply(() => jsonReply(409, { success: false, error: { data } }));
+        const error = await caught(client.post(relative, { message: "" }));
+        expect(error).toBeInstanceOf(ConflictError);
+        const conflictError = error as ConflictError;
+        expect(conflictError.kind).toBe("conflict");
+        expect(conflictError.message).toBe(`POST ${relative}: HTTP 409`);
+        expect(conflictError.details).toEqual(data);
+        expect(conflictError.status).toBe(409);
+        // The hint and the excerpt stay as they were: what a 409 with no text hints is the spec owner's call.
+        expect(conflictError.hint).toBe(data.join("; "));
+        expect(conflictError.bodyExcerpt).toBe(data.join("; "));
+      }
+      // One entry with text keeps the message as it was, the empty entries included.
+      pool()
+        .intercept({ path, method: "POST" })
+        .reply(() => jsonReply(409, { success: false, error: { data: ["", "x"] } }));
+      const mixed = await caught(client.post(relative, { message: "" }));
+      expect(mixed).toBeInstanceOf(ConflictError);
+      expect((mixed as GripError).message).toBe(`POST ${relative}: HTTP 409: ; x`);
+      expect(calls()).toHaveLength(3);
+    });
+  });
+
+  it("the two documented reasons decide the kind on every status but 401, 429 and a 3xx, a JSON 403 included, each from one request", async () => {
+    // The pages record the body text only, never a status ("none seen live"), so the reason decides the kind on
+    // every status the classifier reads a reason on, and a cap answered with 403 reaches the write items as
+    // swipe-cap, not as api. It does not decide it on a 401 (auth-failed, the case below), on a 429 (the backoff
+    // schedule, then throttled) or on a 3xx (api, decided before any body is read for a reason). A 429 that
+    // carries either reason is backed off and raised throttled; whether the reason should win is open with the
+    // spec owner.
     await withSession(async (home) => {
       const client = newClient(home.env);
       const statuses = [200, 201, 400, 403, 404, 409, 422, 500];
@@ -1185,7 +1542,8 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
       for (;;) {
         const next = iterator.next();
         const raced = await Promise.race([next, settle().then(() => undefined)]);
-        const result = raced ?? (await clock.advance(1500).then(() => next));
+        // Annotated: without it the checker reads `result` as possibly undefined; `next` never resolves to undefined.
+        const result: IteratorResult<{ id: number }> = raced ?? (await clock.advance(1500).then(() => next));
         if (result.done) break;
         yielded.push(result.value);
       }
@@ -1199,7 +1557,7 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
     });
   });
 
-  it("raises api when a page is not an array", async () => {
+  it("raises api naming the documented field data when a page is not an array, with the page number in the message", async () => {
     await withSession(async (home) => {
       pool()
         .intercept({ path: (path) => path.startsWith("/1/container/1/search/?"), method: "GET" })
@@ -1207,10 +1565,98 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
       const client = newClient(home.env);
       const error = await caught(
         (async () => {
-          for await (const entry of client.pages("container/1/search/", { sort: "name" })) void entry;
+          for await (const entry of client.pages("container/1/search/", { sort: "name", type_id: "1,2" })) void entry;
         })(),
       );
       expect(error).toBeInstanceOf(ApiError);
+      const gripError = error as GripError;
+      expect(gripError.kind).toBe("api");
+      expect(gripError.status).toBe(200);
+      expect(gripError.message).toBe("GET container/1/search/ (page 1): the answer did not hold an array in data");
+      // One defect class, one hint: the sentence the success branch gives a 2xx envelope without data.
+      expect(gripError.hint).toBe(missingFieldMessage("data"));
+      expect(calls()).toHaveLength(1);
+    });
+  });
+
+  it("builds every page from the query as it stood when iteration started, whatever the caller does to its object", async () => {
+    await withSession(async (home) => {
+      const sent: string[] = [];
+      pool()
+        .intercept({ path: (path) => path.startsWith("/1/container/1/search/?"), method: "GET" })
+        .reply((opts) => {
+          sent.push(opts.path);
+          const page = Number(new URL(opts.path, API_ORIGIN).searchParams.get("page"));
+          return page === 1 ? success200([{ id: 1 }]) : success200([]);
+        })
+        .times(2);
+      const query: Record<string, string | number> = { sort: "name", type_id: "1,2" };
+      const yielded: unknown[] = [];
+      for await (const entry of newClient(home.env).pages("container/1/search/", query)) {
+        yielded.push(entry);
+        // The caller changes a value, adds a key and deletes a key between the pages.
+        query["sort"] = "date";
+        query["type_id"] = "9";
+        query["extra"] = "1";
+        Reflect.deleteProperty(query, "sort");
+      }
+      expect(yielded).toEqual([{ id: 1 }]);
+      expect(sent).toEqual([
+        "/1/container/1/search/?sort=name&type_id=1,2&page=1",
+        "/1/container/1/search/?sort=name&type_id=1,2&page=2",
+      ]);
+    });
+  });
+
+  it("names the page in every failure raised inside pages(), and keeps the diagnostic line's METHOD path: status form", async () => {
+    await withSession(async (home) => {
+      const search = (path: string): boolean => path.startsWith("/1/container/1/search/?");
+      const page = (path: string): number => Number(new URL(path, API_ORIGIN).searchParams.get("page"));
+      const failures: [string, () => GripReply, typeof ApiError | typeof ThrottledError, string][] = [
+        ["an absent data key", () => jsonReply(200, { success: true }), ApiError, missingFieldMessage("data")],
+        ["an HTTP 500", () => jsonReply(500, { unexpected: true }), ApiError, "unexpected answer (HTTP 500)"],
+        ["a success: false", () => failure("synthetic reason 2", 400), ApiError, "HTTP 400: synthetic reason 2"],
+        ["a mistyped entry", () => success200([{ id: "not a number" }]), ApiError, missingFieldMessage("id")],
+      ];
+      // Page 1 holds one entry of the documented type, so every case fails on page 2.
+      const schema = z.object({ id: z.number() });
+      for (const [label, reply, errorClass, detail] of failures) {
+        pool()
+          .intercept({ path: search, method: "GET" })
+          .reply((opts) => (page(opts.path) === 1 ? success200([{ id: 1 }]) : reply()))
+          .times(2);
+        const stderr = stderrSink();
+        const client = newClient(home.env, { stderr: stderr.stream });
+        const error = await caught(
+          (async () => {
+            for await (const entry of client.pages("container/1/search/", { sort: "name" }, { schema })) void entry;
+          })(),
+        );
+        expect(error, label).toBeInstanceOf(errorClass);
+        const message = (error as GripError).message;
+        expect(message, label).toContain("GET container/1/search/ (page 2): ");
+        expect(message.split("page 2").length - 1, `${label}: the page is named once`).toBe(1);
+        expect(message.split("page 1").length - 1, `${label}: no other page is named`).toBe(0);
+        expect(message, label).toContain(detail);
+        for (const line of stderr.text().trimEnd().split("\n"))
+          expect(line, label).toMatch(/^GET container\/1\/search\/: \d{3}$/);
+      }
+      // A throttled page: the schedule runs out on page 2.
+      const clock = recordingClock();
+      pool()
+        .intercept({ path: search, method: "GET" })
+        .reply((opts) => (page(opts.path) === 1 ? success200([{ id: 1 }]) : throttled429()))
+        .times(5);
+      const throttled = caught(
+        (async () => {
+          for await (const entry of newClient(home.env, { clock }).pages("container/1/search/", { sort: "name" }))
+            void entry;
+        })(),
+      );
+      await drain(clock, throttled);
+      const error = await throttled;
+      expect(error).toBeInstanceOf(ThrottledError);
+      expect((error as GripError).message).toContain("page 2");
     });
   });
 
@@ -1252,7 +1698,7 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
     expect(isProfilePath("GET", "container/9840/thing/user_id")).toBe(true);
     expect(isProfilePath("GET", "container/1/thing/user_id/match/2/status")).toBe(false);
     expect(isProfilePath("GET", "container/1/thing/user_id/interested")).toBe(false);
-    expect(isProfilePath("POST", "container/1/thing/user_id/match_manual/yes/to_thing/2")).toBe(false);
+    expect(isProfilePath("POST", WRITE_PATH)).toBe(false);
     expect(isProfilePath("POST", "container/1/thing/2")).toBe(false);
     expect(isProfilePath("GET", "container/1/search/")).toBe(false);
     expect(isProfilePath("GET", "container")).toBe(false);
@@ -1492,6 +1938,64 @@ class StreamingDispatcher extends Dispatcher {
   }
 }
 
+/**
+ * A dispatcher that answers `status` with its headers and the start of a body, then either fails the body with
+ * `failure` or, with none, leaves the body open until the client aborts the request.
+ */
+class BrokenBodyDispatcher extends Dispatcher {
+  aborted = false;
+  /** True once the status and the start of the body were delivered. */
+  started = false;
+
+  constructor(
+    private readonly status: number,
+    private readonly failure?: Error,
+  ) {
+    super();
+  }
+
+  override dispatch(_options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
+    const controller = {
+      paused: false,
+      aborted: false,
+      reason: null as unknown,
+      rawHeaders: null,
+      rawTrailers: null,
+      pause: (): void => undefined,
+      resume: (): void => undefined,
+      abort: (reason: unknown): void => {
+        if (controller.aborted) return;
+        controller.aborted = true;
+        controller.reason = reason;
+        this.aborted = true;
+        handler.onResponseError?.(controller as never, reason as Error);
+      },
+    };
+    handler.onRequestStart?.(controller as never, null);
+    handler.onResponseStart?.(controller as never, this.status, { "content-type": "application/json" }, "OK");
+    setImmediate(() => {
+      if (controller.aborted) return;
+      handler.onResponseData?.(controller as never, Buffer.from('{"success":true,'));
+      this.started = true;
+      const failure = this.failure;
+      if (failure !== undefined) {
+        setImmediate(() => {
+          if (!controller.aborted) handler.onResponseError?.(controller as never, failure);
+        });
+      }
+    });
+    return true;
+  }
+
+  override close(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  override destroy(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 describe("[CAP-CLIENT] AC-14 the request timeout and the body cap", () => {
   it("aborts a request that has not answered after 30 s on the clock and raises network", async () => {
     await withSession(async (home) => {
@@ -1522,6 +2026,49 @@ describe("[CAP-CLIENT] AC-14 the request timeout and the body cap", () => {
     });
   });
 
+  it("names the status that arrived when the body read fails after it, on the error and on its diagnostic line", async () => {
+    await withSession(async (home) => {
+      // A reset in the middle of the body.
+      const resetStderr = stderrSink();
+      const reset = new GripClient({
+        dispatcher: new BrokenBodyDispatcher(200, new Error("synthetic reset 1")),
+        clock: fakeClock(),
+        env: home.env,
+        stderr: resetStderr.stream,
+      });
+      const broken = await caught(reset.post(WRITE_PATH, { message: "" }));
+      expect(broken).toBeInstanceOf(NetworkError);
+      const brokenError = broken as GripError;
+      expect(brokenError.kind).toBe("network");
+      expect(brokenError.hint).toBe("check the connection");
+      expect(brokenError.status).toBe(200);
+      expect(brokenError.message).toContain(`POST ${WRITE_PATH}: HTTP 200 `);
+      expect(resetStderr.text()).toContain(`POST ${WRITE_PATH}: HTTP 200 `);
+
+      // The request timeout firing while the body is still arriving.
+      const clock = fakeClock();
+      const stalledStderr = stderrSink();
+      const stalled = new BrokenBodyDispatcher(201);
+      const pending = caught(
+        new GripClient({ dispatcher: stalled, clock, env: home.env, stderr: stalledStderr.stream }).get("container"),
+      );
+      try {
+        await waitFor(() => stalled.started, "the status and the start of the body to arrive");
+        await settle();
+        await clock.advance(REQUEST_TIMEOUT_MS);
+        const timedOut = await pending;
+        expect(timedOut).toBeInstanceOf(NetworkError);
+        const timedOutError = timedOut as GripError;
+        expect(timedOutError.status).toBe(201);
+        expect(timedOutError.message).toContain("GET container: HTTP 201 ");
+        expect(timedOutError.message).toContain("30 s");
+        expect(stalledStderr.text()).toContain("GET container: HTTP 201 ");
+      } finally {
+        await drain(clock, pending);
+      }
+    });
+  });
+
   it("raises network, with a redacted cause, when the fetch itself fails, and names the cause's code and message", async () => {
     await withSession(async (home) => {
       // No interceptor and no network: the mock agent refuses the connection.
@@ -1546,6 +2093,82 @@ describe("[CAP-CLIENT] AC-14 the request timeout and the body cap", () => {
       expect(gripError.message).toContain(inner.message);
       expect(stderr.text()).toContain("the request failed: fetch failed (UND_MOCK_ERR_MOCK_NOT_MATCHED: ");
       expect(stderr.text()).toContain(inner.message);
+    });
+  });
+
+  it("keeps a stored session token that fetch refuses as a header value out of the diagnostic line and the error", async () => {
+    // fetch strips HTTP whitespace from both ends of a header value, then refuses one holding a CR, an LF or a NUL,
+    // quoting the stripped value in its message (undici 8.11.2, lib/web/fetch/headers.js); the request is never sent.
+    for (const shape of [(uuid: string) => ` ${uuid}\nnote`, (uuid: string) => `${uuid}\nnote\n`]) {
+      await withTempHome(async (home) => {
+        const uuid = randomUUID();
+        await saveConfig(sessionConfig(shape(uuid)), { env: home.env });
+        const stderr = stderrSink();
+        const error = await caught(newClient(home.env, { stderr: stderr.stream }).get("container"));
+        expect(error).toBeInstanceOf(NetworkError);
+        const gripError = error as GripError;
+        expect(gripError.kind).toBe("network");
+        expect(gripError.hint).toBe("check the connection");
+        expect(gripError.message).toContain("is an invalid header value");
+        const cause = gripError.cause as Error | undefined;
+        const texts: Record<string, string> = {
+          stderr: stderr.text(),
+          message: gripError.message,
+          string: String(error),
+          json: JSON.stringify(error),
+          causeMessage: cause?.message ?? "",
+          causeStack: cause?.stack ?? "",
+        };
+        for (const [sink, text] of Object.entries(texts)) expect(text, sink).not.toContain(uuid);
+        expect(calls()).toHaveLength(0);
+      });
+    }
+  });
+
+  it("keeps the failure's own frames, redacted, and its errno, syscall, path, address and port on the cause it carries", async () => {
+    await withSession(async (home, secrets) => {
+      registerSecret(secrets.applicationToken);
+      const failure = Object.assign(new Error(`connect ECONNREFUSED ${secrets.applicationToken}`), {
+        code: "ECONNREFUSED",
+        errno: -61,
+        syscall: "connect",
+        path: `/synthetic/${secrets.applicationToken}.sock`,
+        address: "127.0.0.1",
+        port: 443,
+        hostname: "synthetic.example",
+      });
+      failure.stack = `${failure.stack ?? ""}\n    at syntheticFrame (/synthetic/${secrets.applicationToken}.js:1:1)`;
+      pool().intercept({ path: "/1/container", method: "GET" }).replyWithError(failure);
+
+      const error = await caught(newClient(home.env).get("container"));
+
+      expect(error).toBeInstanceOf(NetworkError);
+      const chain: (Error & Record<string, unknown>)[] = [];
+      for (let link: unknown = (error as Error).cause; link instanceof Error; link = link.cause) {
+        chain.push(link as Error & Record<string, unknown>);
+      }
+      const copy = chain.find((link) => link["syscall"] !== undefined);
+      if (copy === undefined) throw new Error("no cause in the chain carries the failure's syscall");
+      // The original's frames, passed through redactString: its first line is the redacted message.
+      expect(copy.stack).toBe(redactString(failure.stack));
+      expect(copy.stack).toContain("client.test.ts");
+      expect(copy.stack?.split("\n")[0]).toBe(`Error: connect ECONNREFUSED ${REDACTED}`);
+      expect(copy.message).toBe(`connect ECONNREFUSED ${REDACTED}`);
+      expect(copy["code"]).toBe("ECONNREFUSED");
+      expect(copy["errno"]).toBe(-61);
+      expect(copy["syscall"]).toBe("connect");
+      expect(copy["address"]).toBe("127.0.0.1");
+      expect(copy["port"]).toBe(443);
+      expect(copy["path"]).toBe(`/synthetic/${REDACTED}.sock`);
+      // Nothing beyond the named properties is copied.
+      expect(copy["hostname"]).toBeUndefined();
+      const texts = [
+        JSON.stringify(error),
+        String(error),
+        (error as Error).message,
+        ...chain.map((link) => link.stack ?? ""),
+      ];
+      for (const text of texts) expect(text).not.toContain(secrets.applicationToken);
     });
   });
 
@@ -1668,22 +2291,32 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
       if (error.bodyExcerpt !== undefined) expect(error.bodyExcerpt).toContain(REDACTED);
       expect(error.name).toBe(error.constructor.name);
     }
-    expect(errors.map((error) => error.kind)).toEqual([
-      "api",
-      "network",
-      "auth-failed",
-      "throttled",
-      "swipe-cap",
-      "gated-type",
-      "load-balancer-rejected",
-      "unknown-slug",
-      "mode-phase",
-      "conflict",
-      "usage",
-      "write-refused",
-      "config",
-      "no-session",
-    ]);
+    expect(errors.map((error) => error.kind)).toEqual(FOURTEEN_KINDS);
+  });
+
+  it("owns a status or a bodyExcerpt key only where one was given, never a key holding undefined", () => {
+    const local: GripError[] = [
+      new NoSessionError(),
+      new ConfigError("synthetic config failure 1"),
+      new NetworkError("synthetic network failure 1"),
+      new UsageError("synthetic usage 1"),
+      new WriteRefusedError("synthetic refusal 1"),
+    ];
+    for (const error of local) {
+      expect(Object.hasOwn(error, "status"), `${error.name} owns status`).toBe(false);
+      expect(Object.hasOwn(error, "bodyExcerpt"), `${error.name} owns bodyExcerpt`).toBe(false);
+      expect("status" in error, `${error.name}: "status" in error`).toBe(false);
+    }
+    const answered = new ApiError("synthetic api failure 1", "HTTP 500", { status: 500, bodyExcerpt: "x" });
+    expect(Object.hasOwn(answered, "status")).toBe(true);
+    expect(Object.hasOwn(answered, "bodyExcerpt")).toBe(true);
+    expect(answered.status).toBe(500);
+    expect(answered.bodyExcerpt).toBe("x");
+    // An empty excerpt is an excerpt given: kept as before.
+    const emptied = new ApiError("synthetic api failure 2", "HTTP 302", { status: 302, bodyExcerpt: "" });
+    expect(Object.hasOwn(emptied, "bodyExcerpt")).toBe(true);
+    expect(emptied.bodyExcerpt).toBe("");
+    expect(Object.hasOwn(new ThrottledError("HTTP 429"), "status")).toBe(true);
   });
 
   it("writes one redacted diagnostic line per request on the injected stderr: method, path and status, never a header value or a body", async () => {
@@ -1730,7 +2363,10 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
     });
   });
 
-  it("types kind as the union of the fourteen kinds: the base constructor refuses an unknown kind at compile time", () => {
+  it("the base constructor keeps the kind it is given at run time, an unknown kind included", () => {
+    // `pnpm typecheck` excludes test files (packages/core/tsconfig.json), so the expect-error line below is checked
+    // by an editor or an explicit `tsc` run over this file, and by no gate: `pnpm test` runs it untyped, and
+    // `pnpm lint` reads test files without type information.
     // @ts-expect-error -- "not-a-kind" is not a GripErrorKind; the parameter is the union, not string
     const rejected = new GripError("not-a-kind", "synthetic message 1");
     expect(rejected.kind).toBe("not-a-kind");
@@ -1745,19 +2381,7 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
       // withTempHome puts the variable back when the test ends.
       const configFile = join(home.dir, "named-by-the-environment.yaml");
       process.env["GRIPEVENTSCTL_CONFIG_FILE"] = configFile;
-      await saveConfig(
-        {
-          version: 1,
-          session: {
-            slug: "testevent",
-            container_id: 1,
-            token: secrets.sessionToken,
-            signed_in_at: "2026-10-12T11:00:00Z",
-          },
-          writes: { enabled: false },
-        },
-        { env: { ...process.env } },
-      );
+      await saveConfig(sessionConfig(secrets.sessionToken), { env: { ...process.env } });
       pool()
         .intercept({ path: "/1/container", method: "GET" })
         .reply(() => containerList200());
@@ -1783,10 +2407,75 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
     });
   });
 
-  it("the throttled kind and the schedule are reachable through the public error class", () => {
+  it("ThrottledError carries the throttled kind, status 429 and the documented hint", () => {
     const error = new ThrottledError("HTTP 429");
     expect(error.kind).toBe("throttled");
     expect(error.status).toBe(429);
     expect(error.hint).toBe("wait and retry later; never a workaround");
+  });
+});
+
+describe("[CAP-CLIENT] the run-time surface of the package entry (the issue's § Public interface)", () => {
+  it("exports GripClient with exactly the methods get, login, lookupConfig, pages and post, and fifteen error classes, each kind class building a GripError that carries its kind (run-time values only; no type name is checked)", () => {
+    const methods = Object.getOwnPropertyNames(core.GripClient.prototype).filter((name) => name !== "constructor");
+    expect(methods.sort()).toEqual(["get", "login", "lookupConfig", "pages", "post"]);
+
+    // One instance of each kind class the entry exports, in the order of the fourteen kinds.
+    type ErrorClass = abstract new (...args: never[]) => GripError;
+    const kindClasses: [string, ErrorClass, () => GripError][] = [
+      ["api", core.ApiError, () => new core.ApiError("synthetic message 1")],
+      ["network", core.NetworkError, () => new core.NetworkError("synthetic message 2")],
+      ["auth-failed", core.AuthFailedError, () => new core.AuthFailedError("synthetic message 3")],
+      ["throttled", core.ThrottledError, () => new core.ThrottledError("synthetic message 4")],
+      ["swipe-cap", core.SwipeCapError, () => new core.SwipeCapError("synthetic message 5")],
+      ["gated-type", core.GatedTypeError, () => new core.GatedTypeError("synthetic message 6")],
+      [
+        "load-balancer-rejected",
+        core.LoadBalancerRejectedError,
+        () => new core.LoadBalancerRejectedError("synthetic message 7"),
+      ],
+      ["unknown-slug", core.UnknownSlugError, () => new core.UnknownSlugError("synthetic message 8")],
+      ["mode-phase", core.ModePhaseError, () => new core.ModePhaseError("synthetic message 9")],
+      ["conflict", core.ConflictError, () => new core.ConflictError("synthetic message 10", [])],
+      ["usage", core.UsageError, () => new core.UsageError("synthetic message 11")],
+      ["write-refused", core.WriteRefusedError, () => new core.WriteRefusedError("synthetic message 12")],
+      ["config", core.ConfigError, () => new core.ConfigError("synthetic message 13")],
+      ["no-session", core.NoSessionError, () => new core.NoSessionError()],
+    ];
+    expect(kindClasses.map(([kind]) => kind)).toEqual(FOURTEEN_KINDS);
+    expect(typeof core.GripError).toBe("function");
+    for (const [kind, errorClass, build] of kindClasses) {
+      expect(typeof errorClass, kind).toBe("function");
+      const error = build();
+      expect(error, kind).toBeInstanceOf(errorClass);
+      expect(error, kind).toBeInstanceOf(core.GripError);
+      expect(error.kind, kind).toBe(kind);
+    }
+
+    // The fifteen are every value the entry exports that builds a GripError: the base class and the kind classes.
+    const buildsGripError = (value: unknown): boolean =>
+      typeof value === "function" &&
+      (value === core.GripError || (value as { prototype?: unknown }).prototype instanceof core.GripError);
+    const errorClassNames = Object.entries(core)
+      .filter(([, value]) => buildsGripError(value))
+      .map(([name]) => name)
+      .sort();
+    expect(errorClassNames).toEqual([
+      "ApiError",
+      "AuthFailedError",
+      "ConfigError",
+      "ConflictError",
+      "GatedTypeError",
+      "GripError",
+      "LoadBalancerRejectedError",
+      "ModePhaseError",
+      "NetworkError",
+      "NoSessionError",
+      "SwipeCapError",
+      "ThrottledError",
+      "UnknownSlugError",
+      "UsageError",
+      "WriteRefusedError",
+    ]);
   });
 });

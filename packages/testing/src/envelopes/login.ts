@@ -13,7 +13,10 @@ export interface LoginOptions {
   firstLogin?: boolean;
 }
 
-/** docs/api/login.md § Response: the 200 answer to `POST user/account/login`. Field names from the page; the ids synthetic. */
+/**
+ * docs/api/login.md § Response: the 200 answer to `POST user/account/login`. Field names from the page; the ids
+ * synthetic.
+ */
 export function login200(options: LoginOptions): GripReply {
   return success200({
     first_login: options.firstLogin ?? false,

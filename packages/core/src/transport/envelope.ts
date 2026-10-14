@@ -43,10 +43,17 @@ export function parseJson(text: string): unknown {
   }
 }
 
-/** The envelope `text` holds, or `undefined` where the body is not JSON or not of the envelope shape. */
-export function parseEnvelope(text: string): Envelope | undefined {
-  const body = parseJson(text);
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
+/** True for a JSON object or array (`typeof` says `object`) that is not `null`: a value whose keys can be read. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * The envelope a body already parsed holds (the value `parseJson` returns), or `undefined` where it is not of the
+ * envelope shape. The client parses each answer's text once and reads the envelope from that value.
+ */
+export function envelopeOf(body: unknown): Envelope | undefined {
+  if (!isRecord(body) || Array.isArray(body)) return undefined;
   const result = envelopeSchema.safeParse(body);
   return result.success ? { success: result.data.success, data: result.data.data } : undefined;
 }
@@ -82,10 +89,10 @@ export function gatedThingId(reason: string): number | undefined {
  * and the answer is the `api` kind. An open point with the spec owner.
  */
 export function conflictDetails(body: unknown): string[] | undefined {
-  if (typeof body !== "object" || body === null) return undefined;
-  const error: unknown = (body as Record<string, unknown>)["error"];
-  if (typeof error !== "object" || error === null) return undefined;
-  const data: unknown = (error as Record<string, unknown>)["data"];
+  if (!isRecord(body)) return undefined;
+  const error = body["error"];
+  if (!isRecord(error)) return undefined;
+  const data = error["data"];
   if (!Array.isArray(data)) return undefined;
   return data.map((item: unknown) => dataText(item));
 }

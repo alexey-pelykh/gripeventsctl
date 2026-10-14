@@ -32,23 +32,31 @@
 import { type Dispatcher, fetch, getGlobalDispatcher } from "undici";
 import type { ZodType } from "zod";
 
-import { loadConfig, recordAuthFailure, resolveSessionToken } from "../config/store.js";
+import {
+  type ConfigStore,
+  createConfigStore,
+  loadConfig,
+  recordAuthFailure,
+  resolveSessionToken,
+} from "../config/store.js";
 import { type Clock, systemClock } from "../lib/clock.js";
 import { redactString, registerSecret } from "../lib/redact.js";
 import { MAX_RETRIES, backoffWaitS } from "./backoff.js";
 import {
   type ConfigLookup,
+  type Envelope,
   MODE_PHASE_REASON,
   SWIPE_CAP_REASON,
   UNKNOWN_SLUG_REASON,
   configLookupSchema,
   conflictDetails,
   dataText,
+  envelopeOf,
   gatedThingId,
   isGatedTypeReason,
+  isRecord,
   loginAnswerSchema,
   missingFieldMessage,
-  parseEnvelope,
   parseJson,
   schemaFailureMessage,
 } from "./envelope.js";
@@ -60,11 +68,13 @@ import {
   LoadBalancerRejectedError,
   ModePhaseError,
   NetworkError,
+  NoSessionError,
   SwipeCapError,
   ThrottledError,
   UnknownSlugError,
   WIRE_BREAKAGE_HINT,
   bodyExcerpt,
+  errorCode,
 } from "./errors.js";
 import { BASE_URL, type HeaderSet, authenticatedHeaders, loginHeaders, lookupHeaders } from "./headers.js";
 
@@ -74,6 +84,46 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 export const BODY_CAP_BYTES = 16 * 1024 * 1024;
 /** The least time on the clock between two profile reads (`docs/api/attendees.md` § Profile fetch rate). */
 export const PROFILE_SPACING_MS = 1_000;
+
+/**
+ * HTTP whitespace at either end of a header value: fetch strips it before it checks the value (undici 8.11.2,
+ * `lib/web/fetch/headers.js`).
+ */
+const HTTP_WHITESPACE_AT_ENDS = /^[\t\n\r ]+|[\t\n\r ]+$/g;
+
+/** The path part of `BASE_URL`: what every request path starts with. */
+const BASE_PATH = new URL(BASE_URL).pathname;
+
+/**
+ * True for a character that can split a line or rewrite one in a terminal or a log reader: a C0 control character
+ * (U+0000 to U+001F), DEL (U+007F), a C1 control character (U+0080 to U+009F), and the line and paragraph separators
+ * U+2028 and U+2029.
+ */
+function isLineBreakingCode(code: number): boolean {
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029;
+}
+
+/** True where `text` holds a character `isLineBreakingCode` names. */
+function holdsControlCharacter(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    if (isLineBreakingCode(text.charCodeAt(index))) return true;
+  }
+  return false;
+}
+
+/**
+ * `path` quoted for a message, passed through `redactString`: JSON string syntax, with every character
+ * `isLineBreakingCode` names escaped as `\uXXXX`. `JSON.stringify` escapes the C0 range only and leaves DEL, the C1
+ * range and the two separators raw.
+ */
+function quotedPath(path: string): string {
+  let quoted = "";
+  for (const character of JSON.stringify(path)) {
+    const code = character.charCodeAt(0);
+    quoted += isLineBreakingCode(code) ? `\\u${code.toString(16).padStart(4, "0")}` : character;
+  }
+  return redactString(quoted);
+}
 
 export interface GripClientOptions {
   /** The undici dispatcher every request goes through; the global one by default. Tests inject a `MockAgent`. */
@@ -128,10 +178,14 @@ interface RequestSpec {
   url: URL;
   body?: string;
   context: RequestContext;
-  /** The prebuilt header set of a lookup or a login; an authenticated call builds its own once the token is resolved. */
+  /**
+   * The prebuilt header set of a lookup or a login; an authenticated call builds its own once the token is resolved.
+   */
   headers?: HeaderSet;
   /** The slug a lookup asked for, for the `unknown-slug` message. */
   slug?: string;
+  /** The page a `pages()` request asks for: every message of its errors names it; the diagnostic line does not. */
+  page?: number;
 }
 
 interface Answer {
@@ -184,21 +238,53 @@ export function isProfilePath(method: string, path: string): boolean {
   return method === "GET" && /^container\/[^/]+\/thing\/(\d+|user_id)\/?$/.test(pathWithoutQuery(path));
 }
 
-/** True for the directory search path `container/<id>/search/`, where a JSON 403 `not authorized` is the gated-type answer. */
+/**
+ * True for the directory search path `container/<id>/search/`, where a JSON 403 `not authorized` is the gated-type
+ * answer.
+ */
 export function isDirectorySearchPath(path: string): boolean {
   return /^container\/[^/]+\/search\/?$/.test(pathWithoutQuery(path));
 }
 
+/**
+ * The stored session a client's token came from: its `token` field (the token itself, or its `op://` reference) and
+ * its `signed_in_at`. A sign-in replaces both.
+ */
+interface SessionIdentity {
+  token: string;
+  signedInAt: string;
+}
+
+/**
+ * The file-backed config store, with `update` applied only while the file still holds the session `identity` names.
+ * The store reloads the file under its lock before it calls the mutator, so the comparison runs inside the lock: a
+ * session written by another sign-in, before or during the update, is left untouched.
+ */
+function sessionBoundStore(env: NodeJS.ProcessEnv, identity: SessionIdentity): ConfigStore {
+  const store = createConfigStore({ env });
+  return {
+    path: store.path,
+    modeEnforced: store.modeEnforced,
+    load: () => store.load(),
+    save: (config) => store.save(config),
+    update: (mutate) =>
+      store.update((current) => {
+        const session = current.config.session;
+        const same = session?.token === identity.token && session.signed_in_at === identity.signedInAt;
+        return same ? mutate(current) : undefined;
+      }),
+  };
+}
+
 /** Register every token a login answer carries before anything else reads it. */
 function registerLoginSecrets(data: unknown): void {
-  if (typeof data !== "object" || data === null) return;
-  const record = data as Record<string, unknown>;
-  if (typeof record["user_token"] === "string") registerSecret(record["user_token"]);
-  const chatToken = record["chat_token"];
+  if (!isRecord(data)) return;
+  if (typeof data["user_token"] === "string") registerSecret(data["user_token"]);
+  const chatToken = data["chat_token"];
   if (typeof chatToken === "string") registerSecret(chatToken);
-  if (typeof chatToken === "object" && chatToken !== null) {
+  if (isRecord(chatToken)) {
     for (const key of ["Token", "IdentityId"]) {
-      const value = (chatToken as Record<string, unknown>)[key];
+      const value = chatToken[key];
       if (typeof value === "string") registerSecret(value);
     }
   }
@@ -206,12 +292,12 @@ function registerLoginSecrets(data: unknown): void {
 
 /** Register the per-event application token of a config answer before anything else reads it. */
 function registerConfigSecrets(data: unknown): void {
-  if (typeof data !== "object" || data === null) return;
-  const application = (data as Record<string, unknown>)["application"];
-  if (typeof application !== "object" || application === null) return;
-  const general = (application as Record<string, unknown>)["general"];
-  if (typeof general !== "object" || general === null) return;
-  const token = (general as Record<string, unknown>)["token"];
+  if (!isRecord(data)) return;
+  const application = data["application"];
+  if (!isRecord(application)) return;
+  const general = application["general"];
+  if (!isRecord(general)) return;
+  const token = general["token"];
   if (typeof token === "string") registerSecret(token);
 }
 
@@ -225,8 +311,8 @@ function failureDetail(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
   const cause: unknown = error.cause;
   if (!(cause instanceof Error)) return error.message;
-  const code: unknown = (cause as { code?: unknown }).code;
-  const named = typeof code === "string" || typeof code === "number" ? `${String(code)}: ` : "";
+  const code = errorCode(cause);
+  const named = code === undefined ? "" : `${String(code)}: `;
   return `${error.message} (${named}${cause.message})`;
 }
 
@@ -242,12 +328,17 @@ export class GripClient {
   readonly #stderr: NodeJS.WritableStream;
   /** The session token, resolved once per client on the first authenticated call; in memory only. */
   #token: string | undefined;
+  /** The stored session `#token` came from, set with it: what a 401 is recorded against. */
+  #sessionIdentity: SessionIdentity | undefined;
 
   static {
     readPrivateState = (client) => GripClient.#privateState(client);
   }
 
-  /** The private fields by name, for the test that checks the client keeps no credential (AC-04); see `privateStateForTest`. */
+  /**
+   * The private fields by name, for the test that checks the client keeps no credential (AC-04); see
+   * `privateStateForTest`.
+   */
   static #privateState(client: GripClient): Readonly<Record<string, unknown>> {
     return Object.freeze({
       dispatcher: client.#dispatcher,
@@ -255,6 +346,7 @@ export class GripClient {
       env: client.#env,
       stderr: client.#stderr,
       token: client.#token,
+      sessionIdentity: client.#sessionIdentity,
     });
   }
 
@@ -336,39 +428,57 @@ export class GripClient {
    * in flight. No page-size parameter is ever sent (`docs/api/attendees.md` § Directory search).
    */
   async *pages<T = unknown>(path: string, query: Query, options: PagesOptions<T> = {}): AsyncIterable<T> {
-    const pauseMs = options.pauseMs ?? 0;
+    // The query and the options as they stand when iteration starts: every page is built from this copy, whatever
+    // the caller does to its own objects between pages.
+    const fixedQuery: Query = { ...query };
+    const { pauseMs = 0, schema } = options;
     for (let page = 1; ; page += 1) {
       if (page > 1 && pauseMs > 0) await this.#clock.sleep(pauseMs);
       const spec: RequestSpec = {
         method: "GET",
         path,
-        url: this.#url(path, { ...query, page }),
+        url: this.#url(path, { ...fixedQuery, page }),
         context: "authenticated",
+        page,
       };
       const { status, data } = await this.#send(spec);
       if (!Array.isArray(data)) {
+        // `data` is not of the documented type: the hint names the field, the sentence the table's success row
+        // (`successOf`) gives a 2xx envelope without `data`; the message names the page, as every message of a page
+        // does.
         throw new ApiError(
-          `${describe(spec)}: page ${String(page)} did not answer with an array in data`,
-          `page ${String(page)}`,
+          `${subjectOf(spec)}: the answer did not hold an array in data`,
+          missingFieldMessage("data"),
           { status },
         );
       }
       if (data.length === 0) return;
-      for (const entry of data) yield this.#validate(entry, options.schema, spec, status);
+      for (const entry of data) yield this.#validate(entry, schema, spec, status);
     }
   }
 
   // -------------------------------------------------------------------------------------------
 
-  /** The URL of `path` under `BASE_URL`, with `query` appended; a path that would leave the base is refused before any request. */
+  /**
+   * The URL of `path` under `BASE_URL`, with `query` appended. Refused before any request: a path that would leave the
+   * base, and a path the URL parser would send in another form (a `.` segment, a backslash, a space, a fragment, a
+   * control character) or that holds a control character anywhere. So the path the request goes to is the caller's
+   * string, and the rules that key on it (the profile spacing, the gated-type answer) and the diagnostic line, one
+   * line per request, read what is sent.
+   */
   #url(path: string, query?: Query): URL {
     const escapes = path.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.split(/[/?#]/).includes("..");
     const url = escapes ? undefined : new URL(path, BASE_URL);
+    // Each refusal quotes the path with every line-breaking character escaped, then through redactString like every
+    // other line the client builds: a caller may have put a token in it.
     if (url === undefined || !url.href.startsWith(BASE_URL)) {
-      // The quoted path passes through redactString like every other line the client builds: a caller may have
-      // put a token in it.
       throw new TypeError(
-        `GripClient: a path is relative to ${BASE_URL} and must not start with "/" or leave it: ${redactString(JSON.stringify(path))}`,
+        `GripClient: a path is relative to ${BASE_URL} and must not start with "/" or leave it: ${quotedPath(path)}`,
+      );
+    }
+    if (holdsControlCharacter(path) || url.pathname !== `${BASE_PATH}${pathWithoutQuery(path)}`) {
+      throw new TypeError(
+        `GripClient: a path is sent as given, so it must be in the form the URL parser sends (no "." segment, backslash, space, fragment or control character): ${quotedPath(path)}`,
       );
     }
     if (query !== undefined) {
@@ -390,7 +500,7 @@ export class GripClient {
     const result = schema.safeParse(data);
     if (result.success) return result.data;
     const reason = schemaFailureMessage(result.error);
-    throw new ApiError(`${describe(spec)}: ${reason}`, reason, { status });
+    throw new ApiError(`${subjectOf(spec)}: ${reason}`, reason, { status });
   }
 
   #log(line: string): void {
@@ -406,8 +516,19 @@ export class GripClient {
    */
   async #sessionToken(): Promise<string> {
     if (this.#token === undefined) {
-      const { config } = await loadConfig({ env: this.#env });
-      this.#token = await resolveSessionToken(config, { env: this.#env });
+      const { config, path, exists } = await loadConfig({ env: this.#env });
+      // The store's own `NoSessionError` names no file; the client names the one it read, and whether it was there,
+      // so a process that resolves another config file than the terminal where the user signed in says which.
+      if (config.session === undefined) {
+        throw new NoSessionError(exists ? `no session in ${path}` : `no session: no config file at ${path}`);
+      }
+      const identity = { token: config.session.token, signedInAt: config.session.signed_in_at };
+      const token = await resolveSessionToken(config, { env: this.#env });
+      // fetch strips HTTP whitespace from both ends of a header value before it checks it, and quotes the stripped
+      // value when it refuses it; the store registered the token as stored, so the stripped form is registered too.
+      registerSecret(token.replace(HTTP_WHITESPACE_AT_ENDS, ""));
+      this.#token = token;
+      this.#sessionIdentity = identity;
     }
     return this.#token;
   }
@@ -449,6 +570,7 @@ export class GripClient {
   /** Send, wait out 429 on the schedule with the same request, and classify the final answer. */
   async #exchange(spec: RequestSpec, headers: HeaderSet): Promise<Classified> {
     const line = describe(spec);
+    const subject = subjectOf(spec);
     for (let retries = 0; ; retries += 1) {
       await this.#spaceProfileRead(spec);
       const answer = await this.#attempt(spec, headers);
@@ -460,10 +582,10 @@ export class GripClient {
       const waitS = backoffWaitS(retries + 1, answer.headers.get("retry-after"), this.#clock.now());
       if (waitS === undefined) {
         this.#log(`${line}: 429; the backoff schedule has ended after ${String(MAX_RETRIES)} retries`);
-        throw new ThrottledError(`${line}: HTTP 429 after ${String(MAX_RETRIES)} retries; the platform is throttling`, {
-          status: 429,
-          bodyExcerpt: answer.text ?? "",
-        });
+        throw new ThrottledError(
+          `${subject}: HTTP 429 after ${String(MAX_RETRIES)} retries; the platform is throttling`,
+          { status: 429, bodyExcerpt: throttledExcerpt(answer.text) },
+        );
       }
       this.#log(
         `${line}: 429; waiting ${String(waitS)} s before retry ${String(retries + 1)} of ${String(MAX_RETRIES)}`,
@@ -474,7 +596,6 @@ export class GripClient {
 
   /** One attempt: the request under its own timeout, the body read under the cap. */
   async #attempt(spec: RequestSpec, headers: HeaderSet): Promise<Answer> {
-    const line = describe(spec);
     const signal = this.#clock.timeoutSignal(REQUEST_TIMEOUT_MS);
     let response: Response;
     try {
@@ -492,14 +613,14 @@ export class GripClient {
         signal,
       });
     } catch (error: unknown) {
-      throw this.#networkError(line, error, signal);
+      throw this.#networkError(spec, error, signal);
     }
-    const text = await this.#readBody(response, line, signal);
+    const text = await this.#readBody(response, spec, signal);
     return { status: response.status, headers: response.headers, text };
   }
 
   /** The body as text, read in chunks; `undefined` once the cap is passed, with the read cancelled there. */
-  async #readBody(response: Response, line: string, signal: AbortSignal): Promise<string | undefined> {
+  async #readBody(response: Response, spec: RequestSpec, signal: AbortSignal): Promise<string | undefined> {
     const body = response.body;
     if (body === null) return "";
     const reader: ReadableStreamDefaultReader<Uint8Array> = body.getReader();
@@ -517,102 +638,81 @@ export class GripClient {
         chunks.push(value);
       }
     } catch (error: unknown) {
-      throw this.#networkError(line, error, signal, "body");
+      throw this.#networkError(spec, error, signal, response.status);
     }
     return Buffer.concat(chunks).toString("utf8");
   }
 
-  /** The `network` error for a failed attempt; the timeout covers the request and the body read, and the message says which stage it hit. */
-  #networkError(
-    line: string,
-    error: unknown,
-    signal: AbortSignal,
-    stage: "request" | "body" = "request",
-  ): NetworkError {
-    if (signal.aborted) {
-      const seconds = String(REQUEST_TIMEOUT_MS / 1000);
-      const message =
-        stage === "body"
-          ? `${line}: the answer's body did not arrive whole within ${seconds} s of the request`
-          : `${line}: no answer within ${seconds} s`;
-      this.#log(message);
-      return new NetworkError(message, { cause: error });
+  /**
+   * The `network` error for a failed attempt; the timeout covers the request and the body read, and the message says
+   * which stage it hit. Where the status had arrived before the body read failed, the message and the diagnostic line
+   * name it and the error carries it: the platform answered, and a write it answered may have taken effect. The
+   * diagnostic line names the method and the path; the message also names the page.
+   */
+  #networkError(spec: RequestSpec, error: unknown, signal: AbortSignal, status?: number): NetworkError {
+    const seconds = String(REQUEST_TIMEOUT_MS / 1000);
+    let what: string;
+    if (status === undefined) {
+      what = signal.aborted ? `no answer within ${seconds} s` : `the request failed: ${failureDetail(error)}`;
+    } else {
+      const answered = `HTTP ${String(status)} arrived, but its body`;
+      what = signal.aborted
+        ? `${answered} did not arrive whole within ${seconds} s of the request`
+        : `${answered} could not be read: ${failureDetail(error)}`;
     }
-    const detail = failureDetail(error);
-    this.#log(`${line}: the request failed: ${detail}`);
-    return new NetworkError(`${line}: the request failed: ${detail}`, { cause: error });
+    this.#log(`${describe(spec)}: ${what}`);
+    return new NetworkError(`${subjectOf(spec)}: ${what}`, {
+      cause: error,
+      ...(status === undefined ? {} : { status }),
+    });
   }
 
   /**
-   * The classification table; raises exactly one error class or returns `data`. In order: a body over
-   * the cap and a 3xx are `api`; a 403 whose body is not JSON is `load-balancer-rejected`; a JSON 403
-   * on a directory search with `not authorized` is `gated-type`; a 401 is `auth-failed` whatever its
-   * body; the two reasons the app matches on are `swipe-cap` and `mode-phase` on every other status, a
-   * JSON 403 included; any other JSON 403 is `api`; a 409 with an `error.data` array is `conflict`;
-   * the documented 404 on the lookup is `unknown-slug`; a 2xx `success: true` returns `data`; the rest
-   * is `api`.
+   * The classification table; raises exactly one error class or returns `data`. A 429 never reaches it:
+   * `#exchange` runs the backoff schedule on every 429, then raises `throttled`, whatever reason the body
+   * carries. In order: a body over the cap and a 3xx are `api`, decided before any body is read for a
+   * reason; a 403 whose body is not JSON is `load-balancer-rejected`; a JSON 403 on a directory search
+   * with `not authorized` is `gated-type`; a 401 is `auth-failed` whatever its body; the two reasons the
+   * app matches on are `swipe-cap` and `mode-phase` on every status but 401, 429 and a 3xx, a JSON 403
+   * included; any other JSON 403 is `api`; a 409 with an `error.data` array is `conflict`; the documented
+   * 404 on the lookup is `unknown-slug`; a 2xx `success: true` returns `data`; the rest is `api`.
+   *
+   * This method is that order: it calls one helper per row, in the order above, and each helper throws its kind
+   * where its row applies and returns where it does not.
    */
   async #classify(spec: RequestSpec, answer: Answer): Promise<Classified> {
     const { status, text } = answer;
-    const line = describe(spec);
+    const subject = subjectOf(spec);
     const http = `HTTP ${String(status)}`;
+    refuseBodyOverCap(subject, http, status, text);
+    refuseRedirect(subject, http, status);
+    const parsed = parseAnswer(spec, subject, http, status, text);
+    refuseLoadBalancerPage(parsed);
+    refuseGatedType(parsed);
+    await this.#refuseUnauthorized(parsed);
+    refuseMatchedReason(parsed);
+    refuseOtherJson403(parsed);
+    refuseConflict(parsed);
+    refuseUnknownSlug(parsed);
+    const success = successOf(parsed);
+    if (success !== undefined) return success;
+    throw unclassifiedError(parsed);
+  }
 
-    if (text === undefined) {
-      throw new ApiError(
-        `${line}: the answer exceeded ${String(BODY_CAP_BYTES / (1024 * 1024))} MiB and was not read (${http})`,
-        http,
-        { status },
-      );
-    }
-    if (status >= 300 && status < 400) {
-      // Never followed, and the `Location` value never reaches a message.
-      throw new ApiError(`${line}: the platform answered ${http} with a redirect, which the tool never follows`, http, {
-        status,
-      });
-    }
-
-    const json = parseJson(text);
-    const envelope = parseEnvelope(text);
-    const reason = envelope !== undefined && !envelope.success ? dataText(envelope.data) : undefined;
-
-    if (status === 403) {
-      if (json === undefined) {
-        throw new LoadBalancerRejectedError(
-          `${line}: ${http} with a page that is not JSON; the load balancer rejected the request`,
-          {
-            status,
-            bodyExcerpt: text,
-          },
-        );
-      }
-      const data = envelope?.data;
-      // `thing N not authorized` (`docs/api/attendees.md` § Gated for a normal attendee token): the
-      // page does not say what N identifies. It is carried as `typeId` on the issue's reading ("the
-      // hint names the type id where the body names it"); an open point with the spec owner.
-      if (spec.context === "authenticated" && isDirectorySearchPath(spec.path) && isGatedTypeReason(data)) {
-        const named = gatedThingId(data);
-        throw new GatedTypeError(
-          `${line}: ${http} ${JSON.stringify(bodyExcerpt(data))}: the type set includes a type this session cannot list`,
-          {
-            status,
-            bodyExcerpt: data,
-            ...(named === undefined ? {} : { typeId: named }),
-          },
-        );
-      }
-    }
-
-    // Every 401 is `auth-failed`, and a JSON 403 outside the directory search stays `api`, on the
-    // issue's table. What the platform answers to an expired or invalid session token is not
-    // verified (`docs/api/not-verified.md` § Login and session: the earlier clients treated 401,
-    // and the dumper also 403, as an authentication failure). The table's 401 row names one hint and
-    // one `recordAuthFailure()` call for every 401, while AC-08 scopes both to a 401 on an
-    // authenticated call; the login and lookup contexts below follow AC-08 (their own hints, nothing
-    // recorded), and which reading binds is an open point with the spec owner.
+  /**
+   * The 401 row: `auth-failed` whatever the body. Every 401 is `auth-failed`, and a JSON 403 outside the directory
+   * search stays `api`, on the issue's table. What the platform answers to an expired or invalid session token is not
+   * verified (`docs/api/not-verified.md` § Login and session: the earlier clients treated 401, and the dumper also
+   * 403, as an authentication failure). The table's 401 row names one hint and one `recordAuthFailure()` call for
+   * every 401, while AC-08 scopes both to a 401 on an authenticated call; the login and lookup contexts below follow
+   * AC-08 (their own hints, nothing recorded), and which reading binds is an open point with the spec owner.
+   */
+  async #refuseUnauthorized(parsed: ParsedAnswer): Promise<void> {
+    const { spec, status, subject, http, reason } = parsed;
     if (status === 401) {
       if (spec.context === "authenticated") await this.#recordAuthFailure();
       const detail = reason === undefined ? "" : bodyExcerpt(reason);
-      const message = `${line}: ${http}${detail === "" ? "" : `: ${detail}`}`;
+      const message = `${subject}: ${http}${detail === "" ? "" : `: ${detail}`}`;
       if (spec.context === "login") {
         throw new AuthFailedError(`${message}; the login was refused`, {
           status,
@@ -629,73 +729,218 @@ export class GripClient {
       }
       throw new AuthFailedError(`${message}; the session was rejected`, { status, bodyExcerpt: detail });
     }
-
-    // The two reasons the app matches on decide the kind on every status but 401, a JSON 403 included:
-    // the pages record the body text only ("none seen live"), and the write items stop on `swipe-cap`.
-    if (reason === SWIPE_CAP_REASON) {
-      throw new SwipeCapError(`${line}: ${reason}`, { status, bodyExcerpt: reason });
-    }
-    if (reason === MODE_PHASE_REASON) {
-      throw new ModePhaseError(`${line}: ${reason}`, { status, bodyExcerpt: reason });
-    }
-
-    if (status === 403) {
-      // Any other JSON 403 is the `api` kind, not an authentication failure, on the issue's table;
-      // the not-verified note above the 401 row names the expired-token answer this rests on. A 403
-      // whose JSON is not a `success: false` envelope is reported like every other unexpected
-      // answer below: the status as the hint, the body only as the excerpt.
-      if (reason === undefined) {
-        throw new ApiError(`${line}: unexpected answer (${http})`, http, { status, bodyExcerpt: text });
-      }
-      const detail = bodyExcerpt(reason);
-      throw new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: reason });
-    }
-
-    if (status === 409) {
-      const details = conflictDetails(json);
-      if (details !== undefined) {
-        const joined = details.join("; ");
-        throw new ConflictError(`${line}: ${http}: ${bodyExcerpt(joined)}`, details, { status, bodyExcerpt: joined });
-      }
-    }
-
-    if (status === 404 && spec.context === "lookup" && reason === UNKNOWN_SLUG_REASON) {
-      throw new UnknownSlugError(`no container has the slug ${JSON.stringify(spec.slug ?? "")}`, {
-        status,
-        bodyExcerpt: reason,
-      });
-    }
-
-    if (envelope !== undefined && envelope.success && status >= 200 && status < 300) {
-      // JSON cannot carry `undefined`, so `data` being undefined means the key is absent: a missing
-      // documented field, never a result (the envelope always has `data`, and AC-06 forbids returning
-      // `undefined` for it).
-      if (envelope.data === undefined) {
-        const detail = missingFieldMessage("data");
-        throw new ApiError(`${line}: ${detail}`, detail, { status });
-      }
-      return { status, data: envelope.data };
-    }
-
-    // Every message tail and hint built from a body or a reason is the redacted 200-character excerpt,
-    // the same `bodyExcerpt` carries; a 16 MiB `data` never lands in a message.
-    if (reason !== undefined) {
-      const detail = bodyExcerpt(reason);
-      throw new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: reason });
-    }
-    throw new ApiError(`${line}: unexpected answer (${http})`, http, { status, bodyExcerpt: text });
   }
 
-  /** Record the first authentication failure beside the session; a failure to record never masks the 401. */
+  /**
+   * Record the first authentication failure beside the session the token came from, and only while the config file
+   * still holds that session: a session another sign-in wrote since never failed. A failure to record never masks
+   * the 401.
+   */
   async #recordAuthFailure(): Promise<void> {
+    const identity = this.#sessionIdentity;
+    // An authenticated call resolves its token, and with it the session it came from, before it is sent.
+    if (identity === undefined) return;
     try {
-      await recordAuthFailure({ env: this.#env, clock: this.#clock });
+      await recordAuthFailure({ env: this.#env, clock: this.#clock, store: sessionBoundStore(this.#env, identity) });
     } catch (error: unknown) {
       this.#log(
         `could not record the authentication failure: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The rows of the classification table, in the order `#classify` calls them; the 401 row is the
+// method `#refuseUnauthorized`, because it records the failure. Each row throws its kind where it
+// applies and returns where it does not.
+// ---------------------------------------------------------------------------------------------
+
+/** One answer as the rows after the body cap and the 3xx read it: the body parsed once, the envelope read from it. */
+interface ParsedAnswer {
+  readonly spec: RequestSpec;
+  readonly status: number;
+  /** The body as text, read whole under the cap. */
+  readonly text: string;
+  /** What every message names first: `subjectOf(spec)`. */
+  readonly subject: string;
+  /** `HTTP <status>`: the hint where the answer gives no reason. */
+  readonly http: string;
+  /** The parsed body, or `undefined` where it is not JSON. */
+  readonly json: unknown;
+  readonly envelope: Envelope | undefined;
+  /** The `data` of a `success: false` envelope as text; `undefined` for every other answer. */
+  readonly reason: string | undefined;
+}
+
+/** A body over the cap is `api`, decided before any body is read for a reason. */
+function refuseBodyOverCap(
+  subject: string,
+  http: string,
+  status: number,
+  text: string | undefined,
+): asserts text is string {
+  if (text === undefined) {
+    throw new ApiError(
+      `${subject}: the answer exceeded ${String(BODY_CAP_BYTES / (1024 * 1024))} MiB and was not read (${http})`,
+      http,
+      { status },
+    );
+  }
+}
+
+/** A 3xx is `api`, decided before any body is read for a reason. */
+function refuseRedirect(subject: string, http: string, status: number): void {
+  if (status >= 300 && status < 400) {
+    // Never followed, and the `Location` value never reaches a message.
+    throw new ApiError(
+      `${subject}: the platform answered ${http} with a redirect, which the tool never follows`,
+      http,
+      { status },
+    );
+  }
+}
+
+/** The body is parsed once; the envelope is read from the parsed value. */
+function parseAnswer(spec: RequestSpec, subject: string, http: string, status: number, text: string): ParsedAnswer {
+  const json = parseJson(text);
+  const envelope = envelopeOf(json);
+  const reason = envelope !== undefined && !envelope.success ? dataText(envelope.data) : undefined;
+  return { spec, status, text, subject, http, json, envelope, reason };
+}
+
+/** A 403 whose body is not JSON is `load-balancer-rejected`. */
+function refuseLoadBalancerPage(parsed: ParsedAnswer): void {
+  const { status, text, subject, http, json } = parsed;
+  if (status === 403 && json === undefined) {
+    throw new LoadBalancerRejectedError(
+      `${subject}: ${http} with a page that is not JSON; the load balancer rejected the request`,
+      {
+        status,
+        bodyExcerpt: text,
+      },
+    );
+  }
+}
+
+/** A JSON 403 on a directory search whose `data` matches `not authorized` is `gated-type`. */
+function refuseGatedType(parsed: ParsedAnswer): void {
+  const { spec, status, subject, http, envelope } = parsed;
+  if (status === 403) {
+    const data = envelope?.data;
+    // `thing N not authorized` (`docs/api/attendees.md` § Gated for a normal attendee token): the
+    // page does not say what N identifies. It is carried as `typeId` on the issue's reading ("the
+    // hint names the type id where the body names it"); an open point with the spec owner.
+    if (spec.context === "authenticated" && isDirectorySearchPath(spec.path) && isGatedTypeReason(data)) {
+      const named = gatedThingId(data);
+      throw new GatedTypeError(
+        `${subject}: ${http} ${JSON.stringify(bodyExcerpt(data))}: the type set includes a type this session cannot list`,
+        {
+          status,
+          bodyExcerpt: data,
+          ...(named === undefined ? {} : { typeId: named }),
+        },
+      );
+    }
+  }
+}
+
+/** The two reasons the app matches on: `swipe-cap` and `mode-phase`. */
+function refuseMatchedReason(parsed: ParsedAnswer): void {
+  const { status, subject, reason } = parsed;
+  // The two reasons the app matches on decide the kind on every status but 401 (its row runs first), 429
+  // and a 3xx, a JSON 403 included: the pages record the body text only ("none seen live"), and the write
+  // items stop on `swipe-cap`. A 3xx is `api`, decided before any body is read for a reason, and a 429
+  // never reaches `#classify`: `#exchange` runs the backoff schedule on it, then raises `throttled`. So a
+  // 429 that carries either reason is backed off and raised `throttled`, and whether the reason should
+  // win is open with the spec owner.
+  if (reason === SWIPE_CAP_REASON) {
+    throw new SwipeCapError(`${subject}: ${reason}`, { status, bodyExcerpt: reason });
+  }
+  if (reason === MODE_PHASE_REASON) {
+    throw new ModePhaseError(`${subject}: ${reason}`, { status, bodyExcerpt: reason });
+  }
+}
+
+/** Any other JSON 403 is `api`. */
+function refuseOtherJson403(parsed: ParsedAnswer): void {
+  const { status, text, subject, http, reason } = parsed;
+  if (status === 403) {
+    // Any other JSON 403 is the `api` kind, not an authentication failure, on the issue's table;
+    // the not-verified note on the 401 row (`#refuseUnauthorized`) names the expired-token answer
+    // this rests on. A 403 whose JSON is not a `success: false` envelope is reported like every other
+    // unexpected answer: the status as the hint, the body only as the excerpt.
+    if (reason === undefined) throw unexpectedAnswerError(subject, http, status, text);
+    throw reasonError(subject, http, status, reason, text);
+  }
+}
+
+/** A 409 with an `error.data` array is `conflict`. */
+function refuseConflict(parsed: ParsedAnswer): void {
+  const { status, subject, http, json } = parsed;
+  if (status === 409) {
+    const details = conflictDetails(json);
+    if (details !== undefined) {
+      // An array whose every entry is the empty string, however many entries it holds, gives no text: the message
+      // ends at the status, as an empty reason does. Any entry with text keeps the joined array in the message.
+      const joined = details.join("; ");
+      const tail = details.every((detail) => detail === "") ? "" : `: ${bodyExcerpt(joined)}`;
+      throw new ConflictError(`${subject}: ${http}${tail}`, details, { status, bodyExcerpt: joined });
+    }
+  }
+}
+
+/** The documented 404 on the lookup is `unknown-slug`. */
+function refuseUnknownSlug(parsed: ParsedAnswer): void {
+  const { spec, status, reason } = parsed;
+  if (status === 404 && spec.context === "lookup" && reason === UNKNOWN_SLUG_REASON) {
+    throw new UnknownSlugError(`no container has the slug ${JSON.stringify(spec.slug ?? "")}`, {
+      status,
+      bodyExcerpt: reason,
+    });
+  }
+}
+
+/** A 2xx `success: true` returns `data`; `undefined` where the answer is not one. */
+function successOf(parsed: ParsedAnswer): Classified | undefined {
+  const { status, subject, envelope } = parsed;
+  if (envelope !== undefined && envelope.success && status >= 200 && status < 300) {
+    // JSON cannot carry `undefined`, so `data` being undefined means the key is absent: a missing
+    // documented field, never a result (the envelope always has `data`, and AC-06 forbids returning
+    // `undefined` for it).
+    if (envelope.data === undefined) {
+      const detail = missingFieldMessage("data");
+      throw new ApiError(`${subject}: ${detail}`, detail, { status });
+    }
+    return { status, data: envelope.data };
+  }
+  return undefined;
+}
+
+/** The rest is `api`: the reason's excerpt where the answer gives a reason, the unexpected answer otherwise. */
+function unclassifiedError(parsed: ParsedAnswer): ApiError {
+  const { status, text, subject, http, reason } = parsed;
+  // Every message tail and hint built from a body or a reason is the redacted 200-character excerpt,
+  // the same `bodyExcerpt` carries; a 16 MiB `data` never lands in a message.
+  if (reason !== undefined) return reasonError(subject, http, status, reason, text);
+  return unexpectedAnswerError(subject, http, status, text);
+}
+
+/**
+ * The `api` error of a `success: false` answer, the table's row "any other `success: false`": the reason's excerpt
+ * is the message tail and the hint, and the reason is `bodyExcerpt`. Where the answer gives no reason (`data` absent
+ * or the empty string), the hint is the status, the message ends at the status, and `bodyExcerpt` carries the body
+ * text, as it does for an unexpected answer.
+ */
+function reasonError(line: string, http: string, status: number, reason: string, text: string): ApiError {
+  if (reason === "") return new ApiError(`${line}: ${http}`, http, { status, bodyExcerpt: text });
+  const detail = bodyExcerpt(reason);
+  return new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: reason });
+}
+
+/** The `api` error of an answer no other row matched: the status as the hint, the body only as the excerpt. */
+function unexpectedAnswerError(subject: string, http: string, status: number, text: string): ApiError {
+  return new ApiError(`${subject}: unexpected answer (${http})`, http, { status, bodyExcerpt: text });
 }
 
 /**
@@ -705,6 +950,22 @@ export class GripClient {
  */
 function describe(spec: RequestSpec): string {
   return `${spec.method} ${spec.path}`;
+}
+
+/** What every message of an error names: `describe(spec)`, and the page where the request is one of `pages()`. */
+function subjectOf(spec: RequestSpec): string {
+  return spec.page === undefined ? describe(spec) : `${describe(spec)} (page ${String(spec.page)})`;
+}
+
+/**
+ * What a final 429 carries as `bodyExcerpt`: its envelope's `data` where the answer is a `{ success, data }` envelope
+ * with a string `data` (the documented throttling reason), the body text where it is not, and nothing for a body over
+ * the cap.
+ */
+function throttledExcerpt(text: string | undefined): string {
+  if (text === undefined) return "";
+  const data = envelopeOf(parseJson(text))?.data;
+  return typeof data === "string" ? data : text;
 }
 
 /**

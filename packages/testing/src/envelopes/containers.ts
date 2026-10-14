@@ -5,7 +5,10 @@ import { failure, success200 } from "./envelope.js";
 import type { GripReply } from "./reply.js";
 
 export interface ConfigLookupOptions {
-  /** The container's slug. The builder reuses it as `name`; the page records `name` only as "The container name" (`WSAI26` beside the slug `wsai26`), so the equality is a fixture convenience, not a platform fact. */
+  /**
+   * The container's slug. The builder reuses it as `name`; the page records `name` only as "The container name"
+   * (`WSAI26` beside the slug `wsai26`), so the equality is a fixture convenience, not a platform fact.
+   */
   slug: string;
   displayName?: string;
   /** `1` while the edition is live, `0` once it has ended. */
@@ -51,7 +54,11 @@ export interface ContainerEntry {
   branch_url: string;
 }
 
-/** docs/api/containers.md § Containers a session sees (`GET container`): the active containers of the token's application. */
+/**
+ * docs/api/containers.md § Containers a session sees (`GET container`): the active containers of the token's
+ * application. `format: "event"` is a fixture value: the page records `format` only for another container, as
+ * `engagement_hub`.
+ */
 export function containerList200(
   entries: ContainerEntry[] = [
     { id: 1, name: "Test Event 1", format: "event", has_joined: true, branch_url: "https://example.invalid/1" },

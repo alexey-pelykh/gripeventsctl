@@ -12,12 +12,40 @@ describe("[CAP-THROTTLE] the schedule constants and the Retry-After forms (docs/
     expect(RETRY_AFTER_CAP_S).toBe(300);
   });
 
+  it("freezes the schedule, so no importer can change the 429 waits at run time", () => {
+    // `readonly number[]` binds at compile time only, and the package entry hands this array to every importer.
+    const before = [...SCHEDULE_S];
+    expect(Array.isArray(SCHEDULE_S)).toBe(true);
+    expect(Object.isFrozen(SCHEDULE_S)).toBe(true);
+    // The cast reaches the run-time guard; ES modules run in strict mode, so each write throws.
+    const writable = SCHEDULE_S as number[];
+    expect(() => {
+      writable[0] = 1;
+    }).toThrow(TypeError);
+    expect(() => writable.push(480)).toThrow(TypeError);
+    expect(() => {
+      writable.length = 0;
+    }).toThrow(TypeError);
+    expect([...SCHEDULE_S]).toEqual(before);
+    expect(backoffWaitS(1)).toBe(60);
+  });
+
   it("takes a delta-seconds Retry-After as the wait, capped at 300 s", () => {
     expect(backoffWaitS(1, "7")).toBe(7);
     expect(backoffWaitS(3, "7")).toBe(7);
     expect(backoffWaitS(1, "900")).toBe(300);
     expect(backoffWaitS(1, "300")).toBe(300);
     expect(backoffWaitS(2, " 42 ")).toBe(42);
+  });
+
+  it("caps every all-digit Retry-After above 300 s at 300 s, however many digits it has", () => {
+    // 2^53 is the first integer past Number.MAX_SAFE_INTEGER; a value that long still asks for more than the cap.
+    expect(backoffWaitS(1, "9007199254740992")).toBe(300);
+    expect(backoffWaitS(2, "999999999999999999999999999999")).toBe(300);
+    expect(backoffWaitS(3, "9".repeat(400))).toBe(300);
+    expect(backoffWaitS(1, "9007199254740991")).toBe(300);
+    expect(backoffWaitS(1, "0000300")).toBe(300);
+    expect(backoffWaitS(2, "000")).toBe(120);
   });
 
   it("falls back to the attempt's schedule step for zero, a negative, an unparseable value, or a date at or before now", () => {

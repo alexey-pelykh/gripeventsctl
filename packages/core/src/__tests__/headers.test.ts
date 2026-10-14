@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { MOCK_API_ORIGIN, fixtureSecrets } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
@@ -21,6 +25,25 @@ import {
 
 function lowerNames(headers: Record<string, string>): string[] {
   return Object.keys(headers).map((name) => name.toLowerCase());
+}
+
+/** The repository root: this file sits at packages/core/src/__tests__/, four levels below it. */
+const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
+
+/**
+ * The bootstrap bearer as docs/api/containers.md § Config by slug prints it, read from the page at test time, so the
+ * constant is checked against the page and not against itself: the `Authorization: Bearer <value>` line of the fenced
+ * request block under the section heading, before its first subsection. The case fails unless exactly one such line
+ * is there.
+ */
+async function documentedBootstrapBearer(): Promise<string> {
+  const page = await readFile(join(REPO_ROOT, "docs", "api", "containers.md"), "utf8");
+  const section = /^## Config by slug\n([\s\S]*?)^#{2,3} /m.exec(page)?.[1];
+  if (section === undefined) throw new Error("docs/api/containers.md: no § Config by slug section before a subsection");
+  const blocks = [...section.matchAll(/^```[^\n]*\n([\s\S]*?)^```$/gm)].map((block) => block[1] ?? "").join("");
+  const values = [...blocks.matchAll(/^Authorization: Bearer (\S+)$/gm)].map((line) => line[1] ?? "");
+  expect(values, "the Authorization: Bearer line of the fenced block under § Config by slug").toHaveLength(1);
+  return values[0] ?? "";
 }
 
 describe("[CAP-CLIENT] the fixed origin, base URL and version strings (docs/api/README.md § Base URL, § Headers every call sends)", () => {
@@ -74,6 +97,10 @@ describe("[CAP-CLIENT] the header sets", () => {
     });
     expect(BOOTSTRAP_BEARER).toMatch(/^[A-Za-z0-9]{32}$/);
     expect(lowerNames(headers)).not.toContain("x-authorization");
+  });
+
+  it("BOOTSTRAP_BEARER is the value docs/api/containers.md § Config by slug prints, read from the page", async () => {
+    expect(BOOTSTRAP_BEARER).toBe(await documentedBootstrapBearer());
   });
 
   it("loginHeaders: both schemes in one Authorization value, then the rest of the set; the Basic value is registered (docs/api/login.md § Request)", () => {

@@ -49,16 +49,36 @@ export function bodyExcerpt(text: string): string {
 
 const CAUSE_DEPTH = 4;
 
+/** The diagnostic properties a system error carries (`node:net`, `node:fs`) that `safeCause` keeps; nothing else. */
+const DIAGNOSTIC_PROPERTIES = ["errno", "syscall", "path", "address", "port"] as const;
+
+/** The `code` an error carries (`ECONNREFUSED`, `UND_ERR_SOCKET`), where it is a string or a number. */
+export function errorCode(error: Error): string | number | undefined {
+  const code: unknown = (error as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? code : undefined;
+}
+
 /**
  * A copy of `cause` safe to attach to an error: an `Error` whose message is redacted, keeping the
- * original's `name` and `code`, with its own `cause` chain copied the same way.
+ * original's `name`, `code`, its stack (the original's frames, passed through `redactString`, so its
+ * first line carries the redacted message) and the named diagnostic properties `errno`, `syscall`,
+ * `path`, `address` and `port` (a string through `redactString`, a number as it is), with its own
+ * `cause` chain copied the same way. Nothing else of the original is copied.
  */
 export function safeCause(cause: unknown, depth = 0): Error {
   if (cause instanceof Error) {
     const copy = new Error(redactString(cause.message));
     copy.name = cause.name;
-    const code: unknown = (cause as { code?: unknown }).code;
-    if (typeof code === "string" || typeof code === "number") (copy as { code?: string | number }).code = code;
+    if (typeof cause.stack === "string") copy.stack = redactString(cause.stack);
+    const code = errorCode(cause);
+    if (code !== undefined) (copy as { code?: string | number }).code = code;
+    const original = cause as unknown as Record<string, unknown>;
+    const target = copy as unknown as Record<string, unknown>;
+    for (const name of DIAGNOSTIC_PROPERTIES) {
+      const value = original[name];
+      if (typeof value === "string") target[name] = redactString(value);
+      else if (typeof value === "number") target[name] = value;
+    }
     if (cause.cause !== undefined && depth < CAUSE_DEPTH) copy.cause = safeCause(cause.cause, depth + 1);
     return copy;
   }
@@ -68,13 +88,14 @@ export function safeCause(cause: unknown, depth = 0): Error {
 /**
  * The base class. `kind` names the class of failure and is what the CLI maps to an exit code;
  * `hint` says what to do next; `status` and `bodyExcerpt` are present where an HTTP answer was
- * classified.
+ * classified, and absent otherwise: they are declared without a class field (`declare`), so an error
+ * given neither owns no key for them, not a key holding `undefined`.
  */
 export class GripError extends Error {
   readonly kind: GripErrorKind;
   readonly hint: string;
-  readonly status?: number;
-  readonly bodyExcerpt?: string;
+  declare readonly status?: number;
+  declare readonly bodyExcerpt?: string;
 
   constructor(kind: GripErrorKind, message: string, hint = "", options?: GripErrorOptions) {
     const errorOptions: ErrorOptions = {};
@@ -109,13 +130,14 @@ export const AUTH_FAILED_HINT = "gripeventsctl auth signin <slug>";
 
 /**
  * The config holds no session: the user has not signed in, or has signed out. The auth commands
- * item maps this kind to exit code 3 in the CLI.
+ * item maps this kind to exit code 3 in the CLI. The message is `no session` unless the caller names
+ * more, as the transport client does with the config path it read.
  */
 export class NoSessionError extends GripError {
   declare readonly kind: "no-session";
 
-  constructor() {
-    super("no-session", "no session", AUTH_FAILED_HINT);
+  constructor(message = "no session") {
+    super("no-session", message, AUTH_FAILED_HINT);
   }
 }
 
@@ -189,7 +211,10 @@ export const GATED_TYPE_HINT =
  */
 export class GatedTypeError extends GripError {
   declare readonly kind: "gated-type";
-  /** The id the body names (`thing N`), where it names one; whether N is a type id or a thing id is not recorded on the page. */
+  /**
+   * The id the body names (`thing N`), where it names one; whether N is a type id or a thing id is not recorded on the
+   * page.
+   */
   readonly typeId: number | undefined;
 
   constructor(message: string, options: GripErrorOptions & { typeId?: number } = {}) {
@@ -264,7 +289,10 @@ export class UsageError extends GripError {
   }
 }
 
-/** A write refused by the write gate (safe mode, the repeat guard, a missing recorded go-ahead); raised by the write gate item. Exit code 4. */
+/**
+ * A write refused by the write gate (safe mode, the repeat guard, a missing recorded go-ahead); raised by the write
+ * gate item. Exit code 4.
+ */
 export class WriteRefusedError extends GripError {
   declare readonly kind: "write-refused";
 

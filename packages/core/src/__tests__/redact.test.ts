@@ -4,7 +4,8 @@
 import { fixtureSecrets } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
-import { REDACTED, SECRET_PATTERN_SOURCES, redactString } from "../lib/redact.js";
+import { REDACTED, RUNTIME_ONLY_PATTERN_SOURCES, SECRET_PATTERN_SOURCES, redactString } from "../lib/redact.js";
+import { BODY_CAP_BYTES } from "../transport/client.js";
 
 // Synthetic fixtures: shaped like the real secrets, never real ones.
 const UUID = "0f1e2d3c-4b5a-4968-8777-66554433aabb";
@@ -33,7 +34,10 @@ describe("redactString", () => {
   });
 });
 
-/** The lint's reading of a line: every match of every `SECRET_PATTERN_SOURCES` entry, compiled as `scripts/check-secret-leakage.ts` compiles them. */
+/**
+ * The lint's reading of a line: every match of every `SECRET_PATTERN_SOURCES` entry, compiled as
+ * `scripts/check-secret-leakage.ts` compiles them.
+ */
 function lintMatches(text: string): string[] {
   const found: string[] = [];
   for (const source of SECRET_PATTERN_SOURCES) {
@@ -74,5 +78,62 @@ describe("the standalone Basic shape (docs/api/login.md § Request)", () => {
       expect(redactString(`Authorization: Basic ${value}`)).toBe(`Authorization: Basic ${REDACTED}`);
       expect(redactString(`Basic ${value}`)).toBe(`Basic ${REDACTED}`);
     }
+  });
+});
+
+describe("redaction over a whole answer body (an error redacts up to the 16 MiB body cap before it cuts the excerpt)", () => {
+  it("redacts 256 KiB of eyJ with no dot in under 1,000 ms, and still replaces a JWT-shaped value after a long eyJ run", () => {
+    const run = "eyJ".repeat(Math.ceil((256 * 1024) / 3));
+    const started = performance.now();
+    const output = redactString(run);
+    const elapsed = performance.now() - started;
+    expect(output).toBe(run);
+    expect(elapsed).toBeLessThan(1_000);
+    const { chatToken } = fixtureSecrets();
+    // Apart from the run, the token alone goes; joined to it, the match starts at the run's first `eyJ`, as before.
+    expect(redactString(`${run} ${chatToken}`)).toBe(`${run} ${REDACTED}`);
+    expect(redactString(`${run}${chatToken}`)).toBe(REDACTED);
+  });
+
+  it("redacts one run as long as the body cap after each scheme word or key, and never throws", () => {
+    const { applicationToken } = fixtureSecrets();
+    const long = (character: string): string => character.repeat(BODY_CAP_BYTES);
+    const cases: [string, string, string][] = [
+      ["a bare Bearer value", `Bearer ${long("a")}`, `Bearer ${REDACTED}`],
+      [
+        "the login Authorization value",
+        `Authorization: Bearer ${applicationToken}, Basic ${long("1")}`,
+        `Authorization: Bearer ${REDACTED}, Basic ${REDACTED}`,
+      ],
+      ["a Basic value alone", `Basic ${long("1")}`, `Basic ${REDACTED}`],
+      ["the application token key", `general.token: ${long("a")}`, `general.token: ${REDACTED}`],
+      ["a JWT", `eyJ${long("a")}.${"b".repeat(10)}.${"c".repeat(10)}`, REDACTED],
+    ];
+    for (const [label, input, expected] of cases) expect(redactString(input), label).toBe(expected);
+  });
+});
+
+describe("the pattern lists cannot change at run time", () => {
+  const lists: [string, readonly string[]][] = [
+    ["SECRET_PATTERN_SOURCES", SECRET_PATTERN_SOURCES],
+    ["RUNTIME_ONLY_PATTERN_SOURCES", RUNTIME_ONLY_PATTERN_SOURCES],
+  ];
+
+  it.each(lists)("freezes %s, so no importer can change what it matches", (_name, list) => {
+    // `readonly string[]` binds at compile time only: the lint reads SECRET_PATTERN_SOURCES when it runs, and the
+    // package entry hands both lists to every importer.
+    const before = [...list];
+    expect(Array.isArray(list)).toBe(true);
+    expect(Object.isFrozen(list)).toBe(true);
+    // The cast reaches the run-time guard; ES modules run in strict mode, so each write throws.
+    const writable = list as string[];
+    expect(() => {
+      writable[0] = "x";
+    }).toThrow(TypeError);
+    expect(() => writable.push("x")).toThrow(TypeError);
+    expect(() => {
+      writable.length = 0;
+    }).toThrow(TypeError);
+    expect([...list]).toEqual(before);
   });
 });
