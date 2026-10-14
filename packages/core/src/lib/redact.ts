@@ -46,8 +46,8 @@
  * The live-secret registry holds, in memory only, the secret values this process has handled (the
  * session token once it is resolved from the config, the output of the 1Password CLI, the tokens
  * the transport parses, the `Basic` value it builds, and the password the sign-in command reads).
- * `redactString` replaces every registered value wherever it appears, after the pattern
- * replacements, so a value whose shape no pattern knows still never reaches a log. The registry
+ * `redactString` replaces every registered value wherever it appears, whole, beside the values the
+ * patterns match, so a value whose shape no pattern knows still never reaches a log. The registry
  * never touches the file system: this module imports no file or process API.
  */
 /** The bare shape of a session token: a 36-character lowercase UUID. Too common to lint on its own; see `SESSION_TOKEN_PATTERN_SOURCE`. */
@@ -167,49 +167,76 @@ export function registerSecret(value: string): void {
   if (value.length >= MIN_REGISTERED_SECRET_LENGTH) liveSecrets.add(value);
 }
 
-function redactRegisteredSecrets(input: string): string {
-  if (liveSecrets.size === 0) return input;
-  let output = input;
-  // Longest first, so a value that contains another registered value is replaced whole.
-  for (const secret of [...liveSecrets].sort((a, b) => b.length - a.length)) {
-    if (output.includes(secret)) output = output.split(secret).join(REDACTED);
-  }
-  return output;
+/** A shape `redactString` applies: its pattern, and the groups whose text is the secret (0 is the whole match). */
+interface RedactionRule {
+  pattern: RegExp;
+  valueGroups: readonly number[];
 }
 
-const SESSION_TOKEN_PATTERN = new RegExp(SESSION_TOKEN_PATTERN_SOURCE, "gi");
-const JWT_PATTERN = new RegExp(JWT_PATTERN_SOURCE, "g");
-const LOGIN_AUTHORIZATION_PATTERN = new RegExp(LOGIN_AUTHORIZATION_PATTERN_SOURCE, "gi");
-const BASIC_PATTERN = new RegExp(BASIC_PATTERN_SOURCE, "gi");
-const APPLICATION_TOKEN_PATTERN = new RegExp(APPLICATION_TOKEN_PATTERN_SOURCE, "gi");
-const GRIP_CDP_TOKEN_PATTERN = new RegExp(GRIP_CDP_TOKEN_PATTERN_SOURCE, "gi");
-const BEARER_PATTERN = new RegExp(BEARER_PATTERN_SOURCE, "gi");
+// The `d` flag gives each group's place in the input. Every other part of a match (a key, a separator, a scheme
+// word, a quote) is kept.
+const REDACTION_RULES: readonly RedactionRule[] = [
+  { pattern: new RegExp(SESSION_TOKEN_PATTERN_SOURCE, "gid"), valueGroups: [3] },
+  { pattern: new RegExp(JWT_PATTERN_SOURCE, "gd"), valueGroups: [0] },
+  { pattern: new RegExp(LOGIN_AUTHORIZATION_PATTERN_SOURCE, "gid"), valueGroups: [2, 4] },
+  { pattern: new RegExp(BASIC_PATTERN_SOURCE, "gid"), valueGroups: [2] },
+  { pattern: new RegExp(APPLICATION_TOKEN_PATTERN_SOURCE, "gid"), valueGroups: [3] },
+  { pattern: new RegExp(GRIP_CDP_TOKEN_PATTERN_SOURCE, "gid"), valueGroups: [2] },
+  { pattern: new RegExp(BEARER_PATTERN_SOURCE, "gid"), valueGroups: [2] },
+];
+
+/** A range of the input that holds secret text, from `start` up to but not including `end`. */
+interface SecretSpan {
+  start: number;
+  end: number;
+}
+
+/** Every range of `input` a shape's value or a registered value covers, each found in `input` as given. */
+function secretSpans(input: string): SecretSpan[] {
+  const spans: SecretSpan[] = [];
+  for (const { pattern, valueGroups } of REDACTION_RULES) {
+    for (const match of input.matchAll(pattern)) {
+      for (const group of valueGroups) {
+        const range = match.indices?.[group];
+        if (range !== undefined && range[1] > range[0]) spans.push({ start: range[0], end: range[1] });
+      }
+    }
+  }
+  for (const secret of liveSecrets) {
+    for (let at = input.indexOf(secret); at !== -1; at = input.indexOf(secret, at + secret.length)) {
+      spans.push({ start: at, end: at + secret.length });
+    }
+  }
+  return spans;
+}
 
 /**
  * Replace every secret-shaped value and every registered live value in `input` with `<REDACTED>`,
  * keeping the context (header name, JSON key, scheme word) that makes the line readable:
  * `user_token: <REDACTED>`, `Authorization: Bearer <REDACTED>, Basic <REDACTED>`,
  * `"token": "<REDACTED>"`, `"grip_cdp_token": "<REDACTED>"`.
+ *
+ * Every shape and every registered value is matched on `input` as given, and each run of overlapping secret ranges
+ * becomes one `<REDACTED>`. So no replacement hides part of a secret from another match: a registered value is
+ * replaced whole where a shape covers only part of it, two registered values that overlap go together, and a
+ * registered value that covers a shape's key or scheme word leaves the value after it to the shape.
  */
 export function redactString(input: string): string {
-  let output = input.replace(
-    SESSION_TOKEN_PATTERN,
-    (_match, key: string, separator: string) => `${key}${separator}${REDACTED}`,
-  );
-  output = output.replace(JWT_PATTERN, REDACTED);
-  output = output.replace(
-    LOGIN_AUTHORIZATION_PATTERN,
-    (_match, bearer: string, _token: string, basic: string) => `${bearer}${REDACTED}${basic}${REDACTED}`,
-  );
-  output = output.replace(BASIC_PATTERN, (_match, scheme: string) => `${scheme}${REDACTED}`);
-  output = output.replace(
-    APPLICATION_TOKEN_PATTERN,
-    (_match, key: string, separator: string) => `${key}${separator}${REDACTED}`,
-  );
-  output = output.replace(
-    GRIP_CDP_TOKEN_PATTERN,
-    (_match, key: string, _value: string, quote: string) => `${key}${REDACTED}${quote}`,
-  );
-  output = output.replace(BEARER_PATTERN, (_match, scheme: string) => `${scheme}${REDACTED}`);
-  return redactRegisteredSecrets(output);
+  const spans = secretSpans(input).sort((a, b) => a.start - b.start);
+  let output = "";
+  let kept = 0;
+  let run: SecretSpan | undefined;
+  for (const span of spans) {
+    if (run !== undefined && span.start < run.end) {
+      run.end = Math.max(run.end, span.end);
+      continue;
+    }
+    if (run !== undefined) {
+      output += `${input.slice(kept, run.start)}${REDACTED}`;
+      kept = run.end;
+    }
+    run = { ...span };
+  }
+  if (run === undefined) return input;
+  return `${output}${input.slice(kept, run.start)}${REDACTED}${input.slice(run.end)}`;
 }
