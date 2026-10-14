@@ -11,8 +11,6 @@
 
 import { z } from "zod";
 
-// docs/api/interest.md § Throttling (HTTP 429).
-export const THROTTLING_REASON = "Throttling - Maximum sending rate exceeded";
 // docs/api/interest.md § Errors the app matches on (from the app code).
 export const SWIPE_CAP_REASON = "limit of swipes reached for action";
 export const MODE_PHASE_REASON = "action not allowed under current mode phase";

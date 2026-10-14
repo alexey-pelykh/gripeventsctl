@@ -132,10 +132,6 @@ export class GripError extends Error {
   }
 }
 
-export function isGripError(value: unknown): value is GripError {
-  return value instanceof GripError;
-}
-
 /**
  * The config file cannot be found where it must be, read, parsed, validated, written or locked, or
  * an `op://` reference in it cannot be resolved. The auth commands item maps this kind to exit
