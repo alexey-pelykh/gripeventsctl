@@ -1506,6 +1506,35 @@ describe("[CAP-CLIENT] AC-07 the three 403 answers", () => {
       expect(calls()).toHaveLength(1);
     });
   });
+
+  it("decides a 403 on its body, never on its content type: JSON sent as text/html is read as JSON, and a page sent as application/json is the load balancer's", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      const typed = (type: string, data: string): GripReply => ({
+        statusCode: 403,
+        data,
+        responseOptions: { headers: { "content-type": type } },
+      });
+      const gated = JSON.stringify({ success: false, data: "thing 7 not authorized" });
+      pool()
+        .intercept({ path: (requested) => requested.startsWith("/1/container/1/search/"), method: "GET" })
+        .reply(() => typed("text/html", gated));
+      expect(await caught(client.get("container/1/search/", { query: { type_id: "7" } }))).toBeInstanceOf(
+        GatedTypeError,
+      );
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => typed("text/html", gated));
+      const other = await caught(client.get("container"));
+      expect(other).toBeInstanceOf(ApiError);
+      expect((other as GripError).message).toContain("thing 7 not authorized");
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => typed("application/json", "<html>403 Forbidden</html>"));
+      expect(await caught(client.get("container"))).toBeInstanceOf(LoadBalancerRejectedError);
+      expect(calls()).toHaveLength(3);
+    });
+  });
 });
 
 describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
@@ -2146,6 +2175,23 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
       expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBe("2026-10-13T09:00:00Z");
       expect(calls()).toHaveLength(2);
       expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
+    });
+  });
+
+  it("matches the two reasons exactly: a reason that holds the swipe-cap or the mode-phase text among other words is api", async () => {
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      const reasons = ["limit of swipes reached for action today", "note: action not allowed under current mode phase"];
+      for (const reason of reasons) {
+        pool()
+          .intercept({ path, method: "POST" })
+          .reply(() => failure(reason, 400));
+        const error = await caught(client.post(relative, { message: "" }));
+        expect(error, reason).toBeInstanceOf(ApiError);
+        expect((error as GripError).kind, reason).toBe("api");
+        expect((error as GripError).message, reason).toContain(reason);
+      }
+      expect(calls()).toHaveLength(2);
     });
   });
 
