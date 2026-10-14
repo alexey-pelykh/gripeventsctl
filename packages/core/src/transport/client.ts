@@ -265,6 +265,14 @@ interface SessionIdentity {
 }
 
 /**
+ * True where the stored `session` is the sign-in `identity` records: the same `token` field and the same
+ * `signed_in_at` (issue #5 § Public interface). A sign-in replaces both; a sign-out removes the session.
+ */
+function sameSignIn(identity: SessionIdentity, session: { token: string; signed_in_at: string } | undefined): boolean {
+  return session !== undefined && session.token === identity.token && session.signed_in_at === identity.signedInAt;
+}
+
+/**
  * The file-backed config store, with `update` applied only while the file still holds the session `identity` names.
  * The store reloads the file under its lock before it calls the mutator, so the comparison runs inside the lock: a
  * session written by another sign-in, before or during the update, is left untouched.
@@ -277,11 +285,7 @@ function sessionBoundStore(env: NodeJS.ProcessEnv, identity: SessionIdentity): C
     load: () => store.load(),
     save: (config) => store.save(config),
     update: (mutate) =>
-      store.update((current) => {
-        const session = current.config.session;
-        const same = session?.token === identity.token && session.signed_in_at === identity.signedInAt;
-        return same ? mutate(current) : undefined;
-      }),
+      store.update((current) => (sameSignIn(identity, current.config.session) ? mutate(current) : undefined)),
   };
 }
 
@@ -341,7 +345,10 @@ export class GripClient {
   readonly #clock: Clock;
   readonly #env: NodeJS.ProcessEnv;
   readonly #stderr: NodeJS.WritableStream;
-  /** The session token, resolved on the first authenticated call and dropped after a 401; in memory only. */
+  /**
+   * The session token of the sign-in `#sessionIdentity` records, resolved when first needed and again once the stored
+   * session changed; dropped after a 401; in memory only.
+   */
   #token: string | undefined;
   /** The stored session `#token` came from, set and dropped with it: what a 401 is recorded against. */
   #sessionIdentity: SessionIdentity | undefined;
@@ -524,42 +531,46 @@ export class GripClient {
   }
 
   /**
-   * Resolve the session token once per client, from the config file the environment names; never
-   * written anywhere. A 401 records the failure but does not clear the cached token, so a long-lived
-   * client keeps sending it until it is replaced; whether a 401 should drop the cache so the next
-   * call re-reads the config file, or the MCP server should build one client per tool call, is an
-   * open point with the spec owner.
+   * The session token for an authenticated call, read from the config file the environment names on every call
+   * (issue #5 § Public interface): the stored session is resolved, through the 1Password CLI for an `op://`
+   * reference, on the first call and again only once the stored session changed since, in its `token` field or its
+   * `signed_in_at`, or a 401 dropped the cache; otherwise the token cached in memory is reused. So a sign-in or a
+   * sign-out made while a long-lived client runs, as the MCP server's does, takes effect on its next call, with no
+   * restart and no request to the platform. The token is never written anywhere.
    */
   async #sessionToken(): Promise<string> {
-    if (this.#token === undefined) {
-      const { config, path, exists } = await loadConfig({ env: this.#env });
-      // The store's own `NoSessionError` names no file; the client names the one it read, and whether it was there,
-      // so a process that resolves another config file than the terminal where the user signed in says which.
-      if (config.session === undefined) {
-        throw new NoSessionError(exists ? `no session in ${path}` : `no session: no config file at ${path}`);
-      }
-      const identity: SessionIdentity = {
-        slug: config.session.slug,
-        token: config.session.token,
-        signedInAt: config.session.signed_in_at,
-      };
-      const token = await resolveSessionToken(config, { env: this.#env });
-      // fetch strips HTTP whitespace from both ends of a header value before it checks it, and quotes the stripped
-      // value when it refuses it; the store registered the token as stored, so the stripped form is registered too.
-      registerSecret(token.replace(HTTP_WHITESPACE_AT_ENDS, ""));
-      this.#token = token;
-      this.#sessionIdentity = identity;
+    const { config, path, exists } = await loadConfig({ env: this.#env });
+    // The store's own `NoSessionError` names no file; the client names the one it read, and whether it was there,
+    // so a process that resolves another config file than the terminal where the user signed in says which.
+    if (config.session === undefined) {
+      throw new NoSessionError(exists ? `no session in ${path}` : `no session: no config file at ${path}`);
     }
-    return this.#token;
+    const identity: SessionIdentity = {
+      slug: config.session.slug,
+      token: config.session.token,
+      signedInAt: config.session.signed_in_at,
+    };
+    const cached = this.#sessionIdentity;
+    if (this.#token !== undefined && cached !== undefined && sameSignIn(cached, config.session)) {
+      // The same sign-in: the token stands; the identity follows the file, so a hint names the slug as stored now.
+      this.#sessionIdentity = identity;
+      return this.#token;
+    }
+    const token = await resolveSessionToken(config, { env: this.#env });
+    // fetch strips HTTP whitespace from both ends of a header value before it checks it, and quotes the stripped
+    // value when it refuses it; the store registered the token as stored, so the stripped form is registered too.
+    registerSecret(token.replace(HTTP_WHITESPACE_AT_ENDS, ""));
+    this.#token = token;
+    this.#sessionIdentity = identity;
+    return token;
   }
 
   /**
-   * Take the queue slot in call order; resolve the token and exchange inside it. Resolving inside the
-   * slot is a recorded decision (the investigation's advisory: the slot in call order, the token
-   * resolved inside it). It costs this: a first call whose `op://` reference spawns the 1Password CLI
-   * holds every later request in the process, a session-less `lookupConfig()` included, until
-   * `op read` returns, and that read carries no timeout (`config/op.ts`). Resolving outside the slot,
-   * and bounding the read, are open to the principal; neither is changed here.
+   * Take the queue slot in call order; read the stored session and exchange inside it, so the token a request carries
+   * is the one stored when its turn comes. The slot is held while the token resolves (issue #5 § Implementation
+   * notes, the `op` calls): a call whose `op://` reference spawns the 1Password CLI holds every later request in the
+   * process, a session-less `lookupConfig()` included, until `op read` answers or its 120 s bound ends it
+   * (`config/op.ts`), so a hung `op` cannot hold the queue for longer.
    */
   #send(spec: RequestSpec): Promise<Classified> {
     return enqueue(async () => {

@@ -19,6 +19,7 @@ import {
   type FakeClock,
   type FixtureSecrets,
   type GripReply,
+  STUB_OP_SUPPORTED,
   type TempHome,
   configLookup200,
   configLookup404,
@@ -39,6 +40,7 @@ import {
   profile200,
   searchPage200,
   stderrSink,
+  stubOp,
   success200,
   failure,
   swipeCapAnswer,
@@ -51,7 +53,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import type { Config } from "../config/schema.js";
-import { loadConfig, recordAuthFailure, saveConfig, saveSession } from "../config/store.js";
+import {
+  clearSession,
+  loadConfig,
+  recordAuthFailure,
+  resolveSessionToken,
+  saveConfig,
+  saveSession,
+} from "../config/store.js";
 import * as core from "../index.js";
 import { REDACTED, redactString, registerSecret } from "../lib/redact.js";
 import { SCHEDULE_S } from "../transport/backoff.js";
@@ -88,12 +97,21 @@ import {
 import { API_ORIGIN, BASE_URL, BOOTSTRAP_BEARER, USER_AGENT, WEB_APP_ORIGIN } from "../transport/headers.js";
 
 // The store is the real one; `recordAuthFailure` is wrapped so the number of calls per 401 is observable (AC-08
-// says "called once"), which the stored value alone cannot show: the store writes only the first failure.
+// says "called once"), which the stored value alone cannot show: the store writes only the first failure. So is
+// `resolveSessionToken`, the one path to the 1Password CLI, so the number of resolutions is observable with a plain
+// token (issue #5 § Public interface: resolved again only when the stored session changed).
 vi.mock("../config/store.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../config/store.js")>();
-  return { ...original, recordAuthFailure: vi.fn(original.recordAuthFailure) };
+  return {
+    ...original,
+    recordAuthFailure: vi.fn(original.recordAuthFailure),
+    resolveSessionToken: vi.fn(original.resolveSessionToken),
+  };
 });
 const recordAuthFailureMock = vi.mocked(recordAuthFailure);
+const resolveSessionTokenMock = vi.mocked(resolveSessionToken);
+
+const POSIX_ONLY = " (POSIX only: the stub op is a shell script)";
 
 /** The interest write path several cases send, relative to `BASE_URL`, as it reaches the wire, and as its template. */
 const WRITE_PATH = "container/1/thing/user_id/match_manual/yes/to_thing/2";
@@ -584,31 +602,112 @@ describe("[CAP-CLIENT] AC-02 the header set on authenticated calls", () => {
     expect(new NoSessionError().message).toBe("no session");
   });
 
-  it("resolves the session token once per client and reports a broken config as the config kind", async () => {
+  it("reads the stored session on every authenticated call: the token is resolved once while the session is unchanged, again when its token or signed_in_at changed, and a cleared session is no-session; a broken config is the config kind (AC-22)", async () => {
     await withSession(async (home, secrets) => {
+      const resolutionsBefore = resolveSessionTokenMock.mock.calls.length;
       pool()
         .intercept({ path: "/1/container", method: "GET" })
         .reply(() => containerList200())
-        .times(2);
+        .times(4);
       const client = newClient(home.env);
       await client.get("container");
-      // The file changes under the client; the cached token is still the one it resolved first.
-      await saveConfig({ version: 1, writes: { enabled: false } }, { env: home.env });
       await client.get("container");
+      // Two calls on an unchanged session: one resolution.
+      expect(resolveSessionTokenMock.mock.calls.length - resolutionsBefore).toBe(1);
+
+      // A sign-in made while the client lives, as the MCP server's does (session B: another token, a later
+      // signed_in_at), is used on the next call, with no restart and no request to the platform.
+      const other = fixtureSecrets();
+      await saveSession(
+        { slug: SESSION_SLUG, container_id: 1, token: other.sessionToken },
+        { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
+      );
+      await client.get("container");
+      expect(resolveSessionTokenMock.mock.calls.length - resolutionsBefore).toBe(2);
+
+      // The same token under another signed_in_at is a changed session too (issue #5 § Public interface).
+      await saveConfig(
+        {
+          version: 1,
+          session: {
+            slug: SESSION_SLUG,
+            container_id: 1,
+            token: other.sessionToken,
+            signed_in_at: "2026-10-13T09:00:00Z",
+          },
+          writes: { enabled: false },
+        },
+        { env: home.env },
+      );
+      await client.get("container");
+      expect(resolveSessionTokenMock.mock.calls.length - resolutionsBefore).toBe(3);
       expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
         secrets.sessionToken,
         secrets.sessionToken,
+        other.sessionToken,
+        other.sessionToken,
       ]);
-      const fresh = newClient(home.env);
-      expect(await caught(fresh.get("container"))).toBeInstanceOf(NoSessionError);
-      await saveConfig({ version: 1, writes: { enabled: false } }, { env: home.env });
+
+      // A sign-out while the client lives: the next call is no-session, without a request and without a resolution.
+      await clearSession({ env: home.env });
+      expect(await caught(client.get("container"))).toBeInstanceOf(NoSessionError);
+      expect(resolveSessionTokenMock.mock.calls.length - resolutionsBefore).toBe(3);
+
+      // A fresh client reads the same session-less file; a config that cannot be loaded is the config kind.
+      expect(await caught(newClient(home.env).get("container"))).toBeInstanceOf(NoSessionError);
       const brokenEnv = { ...home.env, GRIPEVENTSCTL_CONFIG_FILE: `${home.configFile}.missing-dir/x.yaml` };
       await mkdir(`${home.configFile}.missing-dir`);
       await writeFile(`${home.configFile}.missing-dir/x.yaml`, "version: 2\n", { mode: 0o600 });
       expect(await caught(newClient(brokenEnv).get("container"))).toBeInstanceOf(ConfigError);
-      expect(calls()).toHaveLength(2);
+      expect(calls()).toHaveLength(4);
     });
   });
+
+  it.skipIf(!STUB_OP_SUPPORTED)(
+    `runs op read once while the stored op:// session is unchanged, and again after a sign-in to it${POSIX_ONLY}`,
+    async () => {
+      await withTempHome(async (home) => {
+        const secrets = fixtureSecrets();
+        const stub = await stubOp(`printf '%s\\n' '${secrets.sessionToken}'`);
+        try {
+          // The client's environment names the stub's PATH: the 1Password CLI child inherits PATH from it.
+          const env = { ...home.env, PATH: stub.path };
+          const reference = "op://Vault/Item/token";
+          await saveSession(
+            { slug: SESSION_SLUG, container_id: 1, token: reference },
+            { env, clock: fakeClock("2026-10-13T07:00:00Z") },
+          );
+          pool()
+            .intercept({ path: "/1/container", method: "GET" })
+            .reply(() => containerList200())
+            .times(3);
+          const client = newClient(env);
+          await client.get("container");
+          await client.get("container");
+          expect(await stub.calls()).toHaveLength(1);
+
+          // A later sign-in storing the same reference: signed_in_at changed, so the reference is resolved again.
+          await saveSession(
+            { slug: SESSION_SLUG, container_id: 1, token: reference },
+            { env, clock: fakeClock("2026-10-13T08:00:00Z") },
+          );
+          await client.get("container");
+          const opCalls = await stub.calls();
+          expect(opCalls.map((call) => call.argv)).toEqual([
+            ["read", reference],
+            ["read", reference],
+          ]);
+          expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
+            secrets.sessionToken,
+            secrets.sessionToken,
+            secrets.sessionToken,
+          ]);
+        } finally {
+          await stub.remove();
+        }
+      });
+    },
+  );
 });
 
 describe("[CAP-CLIENT] AC-03 the config lookup by slug (docs/api/containers.md § Config by slug)", () => {
@@ -1258,35 +1357,41 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
     });
   });
 
-  it("records the failure only against the session whose token drew the 401, never against a session signed in since", async () => {
+  it("records the failure only against the session whose token drew the 401, never against a session signed in while that request was in flight", async () => {
     await withSession(async (home, secrets) => {
       const clock = fakeClock("2026-10-13T08:12:00Z");
       const recordsBefore = recordAuthFailureMock.mock.calls.length;
+      const release = deferred<undefined>();
+      let reached = false;
       pool()
         .intercept({ path: "/1/container", method: "GET" })
-        .reply(() => containerList200());
-      pool()
-        .intercept({ path: "/1/container", method: "GET" })
-        .reply(() => failure("synthetic unauthorized 1", 401));
+        .reply(async () => {
+          reached = true;
+          await release.promise;
+          return failure("synthetic unauthorized 1", 401);
+        });
       const client = newClient(home.env, { clock });
-      await client.get("container");
-
-      // Another process signs in: session B, another token and a later signed_in_at, replaces session A.
+      const pending = caught(client.get("container"));
       const other = fixtureSecrets();
-      await saveSession(
-        { slug: "testevent", container_id: 1, token: other.sessionToken },
-        { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
-      );
-      const error = await caught(client.get("container"));
+      try {
+        await waitFor(() => reached, "the request to reach the mock");
+        // Another process signs in while session A's request is in flight: session B, another token and a later
+        // signed_in_at, replaces session A in the file before the 401 arrives.
+        await saveSession(
+          { slug: SESSION_SLUG, container_id: 1, token: other.sessionToken },
+          { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
+        );
+      } finally {
+        // Release the process-wide queue on every outcome, so a failed assertion cannot strand the later cases.
+        release.resolve(undefined);
+      }
+      const error = await pending;
 
       expect(error).toBeInstanceOf(AuthFailedError);
       expect((error as GripError).kind).toBe("auth-failed");
       expect((error as GripError).hint).toBe(`gripeventsctl auth signin ${SESSION_SLUG}`);
-      // The client still sent session A's token, once per call, and recorded the 401 once.
-      expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
-        secrets.sessionToken,
-        secrets.sessionToken,
-      ]);
+      // The request carried session A's token, and the 401 was recorded once, against session A.
+      expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([secrets.sessionToken]);
       expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
       expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(1);
       // Session B never failed, so it carries no failure time.
