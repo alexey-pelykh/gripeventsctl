@@ -2405,35 +2405,50 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
     });
   });
 
-  it("serialises the lookup and an authenticated read on two clients: the second request leaves after the first answered", async () => {
+  it("serialises requests on three clients, two lookups and an authenticated read: each leaves after the one before it answered", async () => {
+    // A lookup reads no file before it dispatches, so without the queue the second lookup would reach the mock while
+    // the first is held. Every interceptor counts the requests in flight, so an overlap is recorded, not sampled.
     await withSession(async (home, secrets) => {
       const release = deferred<undefined>();
-      let lookupReached = false;
+      const reached: string[] = [];
+      let inFlight = 0;
+      let mostInFlight = 0;
+      const answering =
+        (label: string, reply: () => GripReply, held?: Promise<unknown>) => async (): Promise<GripReply> => {
+          inFlight += 1;
+          mostInFlight = Math.max(mostInFlight, inFlight);
+          reached.push(label);
+          await held;
+          inFlight -= 1;
+          return reply();
+        };
+      const lookup = (): GripReply => configLookup200({ ...CONFIG_ANSWER, applicationToken: secrets.applicationToken });
       pool()
         .intercept({ path: "/1/config?container_name=test-event-1", method: "GET" })
-        .reply(async () => {
-          lookupReached = true;
-          await release.promise;
-          return configLookup200({ ...CONFIG_ANSWER, applicationToken: secrets.applicationToken });
-        });
+        .reply(answering("lookup 1", lookup, release.promise));
+      pool()
+        .intercept({ path: "/1/config?container_name=test-event-2", method: "GET" })
+        .reply(answering("lookup 2", lookup));
       pool()
         .intercept({ path: "/1/container", method: "GET" })
-        .reply(() => containerList200());
+        .reply(answering("read", () => containerList200()));
       const clock = fakeClock();
       const first = newClient(home.env, { clock }).lookupConfig("test-event-1");
-      const second = newClient(home.env, { clock }).get("container");
+      const second = newClient(home.env, { clock }).lookupConfig("test-event-2");
+      const third = newClient(home.env, { clock }).get("container");
 
       try {
-        await waitFor(() => lookupReached, "the lookup to reach the mock");
+        await waitFor(() => reached.length > 0, "the first lookup to reach the mock");
         await settle();
-        expect(calls().map((call) => call.path)).toEqual(["/1/config"]);
+        expect(reached).toEqual(["lookup 1"]);
       } finally {
         // Release the process-wide queue on every outcome, so a failed assertion cannot strand the later cases.
         release.resolve(undefined);
-        await Promise.allSettled([first, second]);
+        await Promise.allSettled([first, second, third]);
       }
-      await Promise.all([first, second]);
-      expect(calls().map((call) => call.path)).toEqual(["/1/config", "/1/container"]);
+      await Promise.all([first, second, third]);
+      expect(reached).toEqual(["lookup 1", "lookup 2", "read"]);
+      expect(mostInFlight).toBe(1);
     });
   });
 
