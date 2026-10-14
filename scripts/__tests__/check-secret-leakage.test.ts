@@ -288,6 +288,35 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(footer).not.toContain("revoke");
   });
 
+  it("R22: scans a tracked file of any size: a secret at the end of a file over 1 MiB is flagged", () => {
+    const secrets = fixtureSecrets();
+    const filler = `${"synthetic filler line of a large capture\n".repeat(40_000)}`;
+    expect(filler.length).toBeGreaterThan(1024 * 1024);
+    write("fixtures/large-capture.txt", `${filler}X-Authorization: ${secrets.sessionToken}\n`);
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("fixtures/large-capture.txt:40001: secret-shaped value [");
+    expect(result.stderr).not.toContain(secrets.sessionToken);
+  });
+
+  it("R23: names a tracked file it cannot read and fails, since it cannot vouch for it", () => {
+    write("fixtures/clean.txt", "nothing secret here\n");
+    write("fixtures/deleted.txt", "nothing secret here either\n");
+    commitAll();
+    // Tracked, but no longer in the working tree: the read fails.
+    rmSync(join(repo, "fixtures", "deleted.txt"));
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/^fixtures\/deleted\.txt: not scanned: .*ENOENT/mu);
+    expect(result.stderr).not.toContain("fixtures/clean.txt");
+    expect(result.stderr).toContain("FAIL: 1 tracked file(s) could not be read, so the check cannot vouch for them.");
+  });
+
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
     write(
       "docs/prose.md",
