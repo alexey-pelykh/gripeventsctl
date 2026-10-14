@@ -11,8 +11,14 @@
  *
  * - Session token: the `user_token` the login call returns and every later call sends as the
  *   `X-Authorization` header. Shape: a 36-character lowercase UUID (8-4-4-4-12 hex groups). A
- *   bare UUID is far too common to flag on its own (request ids, fixture ids), so the pattern keys
- *   on the token context: the header name or the JSON key in front of the value.
+ *   bare UUID is far too common to flag on its own (request ids, fixture ids), so the patterns key
+ *   on the token context: the header name or the JSON key in front of the value, or the header
+ *   recorded as a name/value pair (`"name": "X-Authorization", "value": "<uuid>"`, in either order).
+ *
+ * Every key context is matched in plain text and in the JSON-escaped form a JSON string holding JSON
+ * text carries, where each quote follows one or more backslashes (`\"user_token\": \"<uuid>\"`).
+ * `redactString` replaces the value and keeps the backslashes before its closing quote, so an escaped
+ * capture stays well formed.
  * - Chat token: the AWS Cognito token the login call returns under `chat_token.Token`, a long
  *   JWT-shaped string (`eyJ…`). Any JWT in tracked source is a leak, so this one has no context.
  * - The login `Authorization` value: `Bearer <application token>, Basic <base64(email:password)>`,
@@ -53,8 +59,37 @@
 /** The bare shape of a session token: a 36-character lowercase UUID. Too common to lint on its own; see `SESSION_TOKEN_PATTERN_SOURCE`. */
 export const UUID_PATTERN_SOURCE = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`;
 
+/**
+ * A double quote, plain or JSON-escaped once or more (`"`, `\"`, `\\\"`). A pattern never starts with it: each
+ * starts at a literal key or scheme word, so a long run of backslashes costs one pass per key, never one per character.
+ */
+const QUOTE_SOURCE = String.raw`\\*"`;
+
+/** A key's optional closing quote, `:` or `=`, and the value's optional opening quote, plain or JSON-escaped. */
+const KEY_SEPARATOR_SOURCE = String.raw`(?:\\*["'])?\s*[:=]\s*(?:\\*["'])?`;
+
+/** A session token after the `user_token` key or the `X-Authorization` header name. Groups: key, separator, token. */
 export const SESSION_TOKEN_PATTERN_SOURCE =
-  String.raw`(user_token|x-authorization)(["']?\s*[:=]\s*["']?)(` + UUID_PATTERN_SOURCE + ")";
+  String.raw`(user_token|x-authorization)(${KEY_SEPARATOR_SOURCE})(` + UUID_PATTERN_SOURCE + ")";
+
+/**
+ * A session token as the value of the `X-Authorization` header recorded as a name/value pair, the name first
+ * (`"name": "X-Authorization", "value": "<uuid>"`, as a HAR capture records a header). Groups: the pair up to the
+ * value's opening quote, the token.
+ */
+export const SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE =
+  String.raw`("name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization${QUOTE_SOURCE}\s*,\s*${QUOTE_SOURCE}value${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
+  UUID_PATTERN_SOURCE +
+  ")";
+
+/**
+ * The same pair with the value first (`"value": "<uuid>", "name": "X-Authorization"`): the header name follows the
+ * token, in a lookahead. Groups: the value's key up to its opening quote, the token.
+ */
+export const SESSION_TOKEN_VALUE_NAME_PATTERN_SOURCE =
+  String.raw`("value${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
+  UUID_PATTERN_SOURCE +
+  String.raw`)(?=${QUOTE_SOURCE}\s*,\s*${QUOTE_SOURCE}name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization${QUOTE_SOURCE})`;
 
 /**
  * At least `count` of the one-character class `characterClass`, as `X{count}X*`. `X{count,}` matches
@@ -115,9 +150,12 @@ const NON_WORD_BASE64_VALUE_SOURCE = String.raw`(?=[A-Za-z]*[0-9+/=])` + BASE64_
 /** A `Basic <base64>` value alone, where the base64 is not a plain word. Groups: scheme, base64. */
 export const BASIC_PATTERN_SOURCE = String.raw`(\bBasic\s+)(` + NON_WORD_BASE64_VALUE_SOURCE + ")";
 
-/** The application token in its key context. Groups: key context, separator, token. */
+/**
+ * The application token in its key context: `general.token`, or a `"token"` key inside the object of a `"general"`
+ * key. The backslash before an escaped `"token` is part of the object's text. Groups: key context, separator, token.
+ */
 export const APPLICATION_TOKEN_PATTERN_SOURCE =
-  String.raw`(general\.token|"general"\s*:\s*\{[^{}]*?"token")(["']?\s*[:=]\s*["']?)(` +
+  String.raw`(general\.token|"general${QUOTE_SOURCE}\s*:\s*\{[^{}]*?"token)(${KEY_SEPARATOR_SOURCE})(` +
   atLeast(TOKEN_CHARACTER_SOURCE, 8) +
   ")";
 
@@ -127,7 +165,9 @@ export const APPLICATION_TOKEN_PATTERN_SOURCE =
  * the value's opening quote, the value, the closing quote.
  */
 export const GRIP_CDP_TOKEN_PATTERN_SOURCE =
-  String.raw`("grip_cdp_token"\s*:\s*")(` + atLeast(TOKEN_CHARACTER_SOURCE, 8) + String.raw`)(")`;
+  String.raw`("grip_cdp_token${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
+  atLeast(TOKEN_CHARACTER_SOURCE, 8) +
+  String.raw`)(${QUOTE_SOURCE})`;
 
 /**
  * A bare `Bearer <token>` value. Groups: scheme, token. Run time only: the docs print the public bootstrap bearer this
@@ -142,6 +182,8 @@ export const BEARER_PATTERN_SOURCE = String.raw`(\bBearer\s+)(` + atLeast(TOKEN_
  */
 export const SECRET_PATTERN_SOURCES: readonly string[] = Object.freeze([
   SESSION_TOKEN_PATTERN_SOURCE,
+  SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE,
+  SESSION_TOKEN_VALUE_NAME_PATTERN_SOURCE,
   JWT_PATTERN_SOURCE,
   LOGIN_AUTHORIZATION_PATTERN_SOURCE,
   BASIC_PATTERN_SOURCE,
@@ -177,6 +219,8 @@ interface RedactionRule {
 // word, a quote) is kept.
 const REDACTION_RULES: readonly RedactionRule[] = [
   { pattern: new RegExp(SESSION_TOKEN_PATTERN_SOURCE, "gid"), valueGroups: [3] },
+  { pattern: new RegExp(SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE, "gid"), valueGroups: [2] },
+  { pattern: new RegExp(SESSION_TOKEN_VALUE_NAME_PATTERN_SOURCE, "gid"), valueGroups: [2] },
   { pattern: new RegExp(JWT_PATTERN_SOURCE, "gd"), valueGroups: [0] },
   { pattern: new RegExp(LOGIN_AUTHORIZATION_PATTERN_SOURCE, "gid"), valueGroups: [2, 4] },
   { pattern: new RegExp(BASIC_PATTERN_SOURCE, "gid"), valueGroups: [2] },
@@ -191,6 +235,8 @@ interface SecretSpan {
   end: number;
 }
 
+const BACKSLASH = 0x5c;
+
 /** Every range of `input` a shape's value or a registered value covers, each found in `input` as given. */
 function secretSpans(input: string): SecretSpan[] {
   const spans: SecretSpan[] = [];
@@ -198,7 +244,13 @@ function secretSpans(input: string): SecretSpan[] {
     for (const match of input.matchAll(pattern)) {
       for (const group of valueGroups) {
         const range = match.indices?.[group];
-        if (range !== undefined && range[1] > range[0]) spans.push({ start: range[0], end: range[1] });
+        if (range === undefined) continue;
+        const [start] = range;
+        let [, end] = range;
+        // The backslashes at the end of a value escape its closing quote in a JSON-escaped form: they stay, so the
+        // escaped text keeps its shape. No character but a backslash is left out of the range.
+        while (end > start && input.charCodeAt(end - 1) === BACKSLASH) end -= 1;
+        if (end > start) spans.push({ start, end });
       }
     }
   }
