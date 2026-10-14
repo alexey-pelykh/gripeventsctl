@@ -19,9 +19,9 @@ export const MODE_PHASE_REASON = "action not allowed under current mode phase";
 // docs/api/containers.md § Answers.
 export const UNKNOWN_SLUG_REASON = "No results found for this container name";
 // docs/api/attendees.md § Types: a gated type answers 403 `thing N not authorized`. The match is the
-// issue's table ("data matching `not authorized`"), wider than that documented shape; whether to
-// narrow it to `thing N not authorized`, and whether the hint should advise probing one id per call
-// when the body names no id, are open points with the spec owner.
+// gated-type row of issue #5 § The envelope and the classification ("`data` matching `not authorized`"),
+// wider than that documented shape and applied on the directory search path only; the row's hint names
+// the one-id-per-call method whether or not the body names an id.
 const GATED_TYPE_PATTERN = /not authorized/i;
 const GATED_THING_ID_PATTERN = /\bthing\s+(\d+)\s+not authorized/i;
 
@@ -110,22 +110,19 @@ export function conflictDetails(body: unknown): string[] | undefined {
 /**
  * The config lookup's `data` (`docs/api/containers.md` § Fields of a 200 answer): the display name,
  * the container name, the active flag (`1` live, `0` ended), the application name, id and
- * per-event token, and the type permissions kept as sent. `permissions` is optional, which departs
- * from the issue's rule that a missing documented field is the `api` kind: the docs branch
- * `docs/config-container-id-field` records (verified live 2026-10-13) that
- * `data.application.permissions` was present for `wsai26` and absent for the ended edition `wsai25`,
- * so requiring it would turn every ended-edition lookup into `api`. Whether the issue's typed-field
- * list admits the absence is an open point with the spec owner. `default_container_id` names the
- * application's default event, not the looked-up container, and is not typed; which field holds the
- * container's own id is not verified.
+ * per-event token, and the type permissions kept as sent. `permissions` may be absent without an
+ * error (issue #5 § The envelope and the classification, response validation): the answer for an
+ * ended edition omits the block, in a live run of 2026-10-13 recorded by #6. `default_container_id`
+ * names the application's default event, not the looked-up container, and is not typed; which field
+ * holds the container's own id is not verified.
  *
  * The JSON types come from the page's own literals (`1` / `0` for `active`, "numeric id, for
  * example `165`" for `application_id`, a display name that may be empty); the page's § Example
  * prints a script's formatted output, not the raw answer, so the page at this branch's base does not
- * record the raw types. The same docs branch records both as JSON numbers (`active` (number),
- * `application_id` (number), verified live 2026-10-13), which agrees with this schema. A live
- * answer of another type surfaces as `api` naming the field, the issue's rule for a mistyped
- * documented field, and stops the sign-in at the lookup until the page records the raw types.
+ * record the raw types. The live run of 2026-10-13 records both as JSON numbers, which agrees with
+ * this schema, and #6 brings that fact to the page. A live answer of another type surfaces as `api`
+ * naming the field, the rule for a mistyped documented field (issue #5 § The envelope and the
+ * classification, response validation).
  */
 export const configLookupSchema = z.object({
   container: z.object({
@@ -140,13 +137,10 @@ export const configLookupSchema = z.object({
 export type ConfigLookup = z.infer<typeof configLookupSchema>;
 
 /**
- * The login's `data` (`docs/api/login.md` § Response): `user_token` is the session token;
- * `chat_token` is the AWS Cognito object holding `Token` and `IdentityId`, also accepted as a bare
- * string or absent, because nothing in v1 uses it and its absence must not fail a sign-in. The issue
- * reads two ways here: its § Response validation lists `data.chat_token` among the typed login fields
- * (a missing documented field is the `api` kind), while its `login()` paragraph says only a missing
- * `data.user_token` is `api`. The lenient reading is the recorded decision; which one binds is an
- * open point with the spec owner.
+ * The login's `data` (`docs/api/login.md` § Response): `user_token` is the session token, and a
+ * missing one is the `api` kind; `chat_token` is the AWS Cognito object holding `Token` and
+ * `IdentityId`, also accepted as a bare string, and may be absent without an error, because nothing in
+ * v1 reads it (issue #5 § The envelope and the classification, response validation).
  */
 export const loginAnswerSchema = z.object({
   user_token: z.string().min(1),

@@ -62,7 +62,7 @@ describe("[CAP-THROTTLE] the schedule constants and the Retry-After forms (docs/
   });
 
   it("takes an HTTP-date Retry-After as the whole seconds until that date on the given clock, rounded up and capped at 300 s", () => {
-    // RFC 9110 § 10.2.3 allows delta-seconds and an HTTP-date; the issue's rule names no form.
+    // RFC 9110 § 10.2.3 allows delta-seconds and an HTTP-date, and issue #5 § The backoff schedule takes both.
     const now = new Date("2026-10-12T12:00:00Z");
     expect(backoffWaitS(1, "Mon, 12 Oct 2026 12:00:07 GMT", now)).toBe(7);
     expect(backoffWaitS(3, "Mon, 12 Oct 2026 12:00:07 GMT", now)).toBe(7);

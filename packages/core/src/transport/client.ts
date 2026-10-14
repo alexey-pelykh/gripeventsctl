@@ -14,11 +14,10 @@
  *   (`GET container/<id>/thing/<thing id or user_id>`) by at least 1,000 ms on the clock, measured
  *   before every attempt, a retry after a 429 included.
  * - HTTP 429 is waited out on the backoff schedule (`backoff.ts`) inside the caller's awaited call,
- *   with the queue held, and the same request is retried unchanged. Nothing rotates. Holding the
- *   slot through the wait is a recorded decision, pending ratification: nothing is in flight during
- *   the wait and neither oracle requires the hold, so releasing the slot during the sleep, and an
- *   abort seam on the public methods, are open to the principal. In the MCP server one throttled
- *   call therefore holds every other tool call for the whole schedule.
+ *   with the queue slot held, and the same request is retried unchanged. Nothing rotates. A second
+ *   caller waits until the first request has answered or failed, its 429 waits included (issue #5
+ *   § Every request), so in the MCP server one throttled call holds every other tool call for the
+ *   whole schedule. A signal that cancels a call while it waits is a requirement of #11.
  * - Every answer is classified once, in the order the doc comment of `#classify` lists, into
  *   exactly one error class of `errors.ts`.
  * - Diagnostic lines on the injected `stderr`: one per answer with the method, the path template
@@ -266,7 +265,7 @@ interface SessionIdentity {
 
 /**
  * True where the stored `session` is the sign-in `identity` records: the same `token` field and the same
- * `signed_in_at` (issue #5 § Public interface). A sign-in replaces both; a sign-out removes the session.
+ * `signed_in_at` (issue #5 § `GripClient`). A sign-in replaces both; a sign-out removes the session.
  */
 function sameSignIn(identity: SessionIdentity, session: { token: string; signed_in_at: string } | undefined): boolean {
   return session !== undefined && session.token === identity.token && session.signed_in_at === identity.signedInAt;
@@ -514,9 +513,9 @@ export class GripClient {
 
   /**
    * `data` typed by `schema`, or returned as given when no schema is passed: the type argument `T`
-   * is then the caller's assertion and nothing checks it. The issue's signatures make the schema
-   * optional while `T` stays free; whether the typed return should be reachable only through a
-   * schema is an open point with the spec owner.
+   * is then the caller's assertion and nothing checks it. These are the signatures issue #5
+   * § Public interface prints: the schema is optional and `T` stays free, with no overload that ties
+   * the typed return to a schema.
    */
   #validate<T>(data: unknown, schema: ZodType<T> | undefined, spec: RequestSpec, status: number): T {
     if (schema === undefined) return data as T;
@@ -532,7 +531,7 @@ export class GripClient {
 
   /**
    * The session token for an authenticated call, read from the config file the environment names on every call
-   * (issue #5 § Public interface): the stored session is resolved, through the 1Password CLI for an `op://`
+   * (issue #5 § `GripClient`): the stored session is resolved, through the 1Password CLI for an `op://`
    * reference, on the first call and again only once the stored session changed since, in its `token` field or its
    * `signed_in_at`, or a 401 dropped the cache; otherwise the token cached in memory is reused. So a sign-in or a
    * sign-out made while a long-lived client runs, as the MCP server's does, takes effect on its next call, with no
@@ -567,9 +566,9 @@ export class GripClient {
 
   /**
    * Take the queue slot in call order; read the stored session and exchange inside it, so the token a request carries
-   * is the one stored when its turn comes. The slot is held while the token resolves (issue #5 § Implementation
-   * notes, the `op` calls): a call whose `op://` reference spawns the 1Password CLI holds every later request in the
-   * process, a session-less `lookupConfig()` included, until `op read` answers or its 120 s bound ends it
+   * is the one stored when its turn comes. The slot is held while the token resolves (the answers of 2026-10-14 on
+   * issue #5, the `op` calls): a call whose `op://` reference spawns the 1Password CLI holds every later request in
+   * the process, a session-less `lookupConfig()` included, until `op read` answers or its 120 s bound ends it
    * (`config/op.ts`), so a hung `op` cannot hold the queue for longer.
    */
   #send(spec: RequestSpec): Promise<Classified> {
@@ -647,11 +646,10 @@ export class GripClient {
         headers,
         ...(spec.body === undefined ? {} : { body: spec.body }),
         dispatcher: this.#dispatcher ?? getGlobalDispatcher(),
-        // "manual", not the issue's `redirect: "error"`: in "error" mode fetch rejects a 3xx with a
-        // TypeError that carries no status, while AC-13 requires the `api` error to name the status.
-        // "manual" hands the 3xx answer back unfollowed and `#classify` refuses it with its status;
-        // nothing is sent to the `Location` target either way. The departure from the issue's text
-        // is recorded for the spec owner.
+        // "manual" (issue #5 § Every request): fetch hands a 3xx answer back unfollowed, and `#classify`
+        // refuses it with the status AC-13 requires the `api` error to name; in "error" mode fetch
+        // would reject with a TypeError that carries no status. Nothing is sent to the `Location`
+        // target.
         redirect: "manual",
         signal,
       });
@@ -784,8 +782,8 @@ export class GripClient {
       });
     }
     // The session the token came from, resolved before the call was sent: the failure is recorded beside it and the
-    // hint names its slug. Then the cache is dropped (issue #5 § Public interface): the next call reads the config
-    // file again, and a sign-in stored since is used.
+    // hint names its slug. Then the cache is dropped (issue #5 § The envelope and the classification, the 401 row on
+    // an authenticated call): the next call resolves the stored session again, and a sign-in stored since is used.
     const identity = this.#sessionIdentity;
     await this.#recordAuthFailure();
     this.#token = undefined;

@@ -99,7 +99,7 @@ import { API_ORIGIN, BASE_URL, BOOTSTRAP_BEARER, USER_AGENT, WEB_APP_ORIGIN } fr
 // The store is the real one; `recordAuthFailure` is wrapped so the number of calls per 401 is observable (AC-08
 // says "called once"), which the stored value alone cannot show: the store writes only the first failure. So is
 // `resolveSessionToken`, the one path to the 1Password CLI, so the number of resolutions is observable with a plain
-// token (issue #5 § Public interface: resolved again only when the stored session changed).
+// token (issue #5 § `GripClient`: resolved again only when the stored session changed).
 vi.mock("../config/store.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../config/store.js")>();
   return {
@@ -625,7 +625,7 @@ describe("[CAP-CLIENT] AC-02 the header set on authenticated calls", () => {
       await client.get("container");
       expect(resolveSessionTokenMock.mock.calls.length - resolutionsBefore).toBe(2);
 
-      // The same token under another signed_in_at is a changed session too (issue #5 § Public interface).
+      // The same token under another signed_in_at is a changed session too (issue #5 § `GripClient`).
       await saveConfig(
         {
           version: 1,
