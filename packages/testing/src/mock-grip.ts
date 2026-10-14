@@ -21,18 +21,27 @@ import { afterAll, afterEach } from "vitest";
 export const MOCK_API_ORIGIN = "https://api-prod.grip.events";
 
 /**
+ * Where `mockGrip()` registers its two hooks: Vitest's `afterEach` and `afterAll` unless the harness's own test
+ * captures them.
+ */
+export interface MockGripHooks {
+  afterEach: (check: () => void) => void;
+  afterAll: (close: () => Promise<void>) => void;
+}
+
+/**
  * An undici `MockAgent` with `disableNetConnect()` (an accidental live request fails the test) and
  * call history enabled, `assertNoPendingInterceptors()` after each test and `close()` after all.
  * Request assertions read `agent.getCallHistory()`.
  */
-export function mockGrip(): MockAgent {
+export function mockGrip(hooks: MockGripHooks = { afterEach, afterAll }): MockAgent {
   const agent = new MockAgent();
   agent.disableNetConnect();
   agent.enableCallHistory();
-  afterEach(() => {
+  hooks.afterEach(() => {
     agent.assertNoPendingInterceptors();
   });
-  afterAll(async () => {
+  hooks.afterAll(async () => {
     await agent.close();
   });
   return agent;
