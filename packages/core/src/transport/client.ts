@@ -77,6 +77,7 @@ import {
   bodyExcerpt,
   conflictText,
   errorCode,
+  signInHint,
 } from "./errors.js";
 import { BASE_URL, type HeaderSet, authenticatedHeaders, loginHeaders, lookupHeaders } from "./headers.js";
 
@@ -162,6 +163,11 @@ export interface LoginInput {
   containerId: number;
   email: string;
   password: string;
+  /**
+   * The slug being signed in to, where the caller knows it: a refused login's hint then names it in the sign-in
+   * command, and the literal `<slug>` otherwise. Never sent.
+   */
+  slug?: string;
 }
 
 export interface LoginResult {
@@ -184,7 +190,7 @@ interface RequestSpec {
    * The prebuilt header set of a lookup or a login; an authenticated call builds its own once the token is resolved.
    */
   headers?: HeaderSet;
-  /** The slug a lookup asked for, for the `unknown-slug` message. */
+  /** The slug a lookup asked for, or a login signs in to: the `unknown-slug` message and the login's 401 hint name it. */
   slug?: string;
   /** The page a `pages()` request asks for: every message of its errors names it; the diagnostic line does not. */
   page?: number;
@@ -249,10 +255,11 @@ export function isDirectorySearchPath(path: string): boolean {
 }
 
 /**
- * The stored session a client's token came from: its `token` field (the token itself, or its `op://` reference) and
- * its `signed_in_at`. A sign-in replaces both.
+ * The stored session a client's token came from: its `slug`, which a 401's hint names, and its `token` field (the
+ * token itself, or its `op://` reference) and `signed_in_at`, which a sign-in replaces.
  */
 interface SessionIdentity {
+  slug: string;
   token: string;
   signedInAt: string;
 }
@@ -402,6 +409,7 @@ export class GripClient {
       body: JSON.stringify({ container_id: input.containerId }),
       context: "login",
       headers: loginHeaders(input.applicationToken, input.email, input.password),
+      ...(input.slug === undefined ? {} : { slug: input.slug }),
     };
     const { status, data } = await this.#send(spec);
     registerLoginSecrets(data);
@@ -530,7 +538,11 @@ export class GripClient {
       if (config.session === undefined) {
         throw new NoSessionError(exists ? `no session in ${path}` : `no session: no config file at ${path}`);
       }
-      const identity = { token: config.session.token, signedInAt: config.session.signed_in_at };
+      const identity: SessionIdentity = {
+        slug: config.session.slug,
+        token: config.session.token,
+        signedInAt: config.session.signed_in_at,
+      };
       const token = await resolveSessionToken(config, { env: this.#env });
       // fetch strips HTTP whitespace from both ends of a header value before it checks it, and quotes the stripped
       // value when it refuses it; the store registered the token as stored, so the stripped form is registered too.
@@ -750,7 +762,7 @@ export class GripClient {
       throw new AuthFailedError(`${message}; the login was refused`, {
         status,
         ...excerpt,
-        hint: "check the email and the password, then run `gripeventsctl auth signin <slug>` again",
+        hint: `check the email and the password, then run \`${signInHint(spec.slug)}\` again`,
       });
     }
     if (spec.context === "lookup") {
@@ -760,7 +772,13 @@ export class GripClient {
         hint: WIRE_BREAKAGE_HINT,
       });
     }
-    throw new AuthFailedError(`${message}; the session was rejected`, { status, ...excerpt });
+    // The hint names the stored session's slug: the session the token came from, resolved before the call was sent.
+    const slug = this.#sessionIdentity?.slug;
+    throw new AuthFailedError(`${message}; the session was rejected`, {
+      status,
+      ...excerpt,
+      ...(slug === undefined ? {} : { slug }),
+    });
   }
 
   /**
