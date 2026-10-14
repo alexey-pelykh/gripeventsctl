@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, ExecException } from "node:child_process";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   type ExecFileLike,
+  OP_TIMEOUT_MS,
   isFieldReference,
   isItemReference,
   opEnvironment,
@@ -165,6 +166,28 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
     expect(args).toEqual(["read", "op://Vault/Item/token"]);
     expect(options?.env).toEqual({ OP_ACCOUNT: "x" });
     expect(options?.shell).toBeUndefined();
+  });
+
+  it("bounds every op call at 120 s, and reports a child the timeout killed as the config kind naming op", async () => {
+    const execFile = vi.fn<ExecFileLike>((_file, _args, _options, callback) => {
+      // What `child_process.execFile` hands the callback when its own timeout kills the child (Node 26.11.1):
+      // `killed` true, the signal it sent, no exit code. A non-zero exit has `killed` false and a numeric code.
+      const timedOut = Object.assign(new Error("Command failed: op read op://Vault/Item/token"), {
+        killed: true,
+        signal: "SIGTERM",
+        code: null,
+        cmd: "op read op://Vault/Item/token",
+      }) as unknown as ExecException;
+      callback(timedOut, "", "");
+      return { stdin: null } as unknown as ChildProcess;
+    });
+    const error = await expectConfigError(opRead("op://Vault/Item/token", {}, { execFile }));
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile.mock.calls[0]?.[2].timeout).toBe(OP_TIMEOUT_MS);
+    expect(OP_TIMEOUT_MS).toBe(120_000);
+    expect(error.kind).toBe("config");
+    expect(error.message).toBe("1Password CLI (`op`) did not answer within 120 s while reading op://Vault/Item/token");
+    expect(error.hint).toContain("`op signin`");
   });
 });
 
