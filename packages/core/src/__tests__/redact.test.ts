@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 
 import { fixtureSecrets } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
-import { REDACTED, RUNTIME_ONLY_PATTERN_SOURCES, SECRET_PATTERN_SOURCES, redactString } from "../lib/redact.js";
+import {
+  REDACTED,
+  RUNTIME_ONLY_PATTERN_SOURCES,
+  SECRET_PATTERN_SOURCES,
+  redactString,
+  registerSecret,
+} from "../lib/redact.js";
 import { BODY_CAP_BYTES } from "../transport/client.js";
 
 // Synthetic fixtures: shaped like the real secrets, never real ones.
@@ -167,5 +173,38 @@ describe("the pattern lists cannot change at run time", () => {
       writable.length = 0;
     }).toThrow(TypeError);
     expect([...list]).toEqual(before);
+  });
+});
+
+describe("the registered live values (issue #5 § Redaction: every registered value is replaced wherever it appears)", () => {
+  /** `count` per-run letters: no pattern knows the shape, so only the registry can hide them. */
+  function letters(count: number): string {
+    return Array.from(randomBytes(count), (byte) => String.fromCharCode(97 + (byte % 26))).join("");
+  }
+
+  it("replaces a registered value whole where a pattern matches only a part of it", () => {
+    // A bare Bearer value after the value's own text, and a session token in its key context inside it: a pattern
+    // that replaced its part first would leave the rest of the registered value in the output.
+    const bearerTail = `${letters(4)} Bearer ${randomBytes(12).toString("hex")}`;
+    const tokenInside = `${letters(4)} user_token: ${randomUUID()} ${letters(4)}`;
+    for (const value of [bearerTail, tokenInside]) {
+      registerSecret(value);
+      expect(redactString(`x ${value} y`), value).toBe(`x ${REDACTED} y`);
+    }
+  });
+
+  it("replaces two registered values whole where they overlap in the text", () => {
+    const [head, middle, tail] = [letters(4), letters(4), letters(4)];
+    registerSecret(`${head}${middle}`);
+    registerSecret(`${middle}${tail}`);
+    expect(redactString(`x ${head}${middle}${tail} y`)).toBe(`x ${REDACTED} y`);
+  });
+
+  it("keeps a pattern's key context working where a registered value covers the context itself", () => {
+    // A registered value ending in the scheme word: the token after the word is still the bare Bearer shape.
+    const value = `${letters(6)} Bearer`;
+    const token = randomBytes(12).toString("hex");
+    registerSecret(value);
+    expect(redactString(`${value} ${token}`)).toBe(`${REDACTED} ${REDACTED}`);
   });
 });
