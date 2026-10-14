@@ -200,10 +200,20 @@ export async function opRead(
   const args = opReadArgs(reference);
   const run = options.execFile ?? nodeExecFile;
   const result = await new Promise<{ error: ExecException | null; stdout: string; stderr: string }>((resolve) => {
+    // SIGKILL ends the child when the timeout fires. With `execFile`'s default SIGTERM, a child that ignores it keeps
+    // the call, and with it the client's queue, waiting until it exits on its own, and an exit 0 then reads as an
+    // answer (Node 26.11.1).
     const child = run(
       "op",
       args,
-      { env: opEnvironment(env), encoding: "utf8", maxBuffer: 1024 * 1024, windowsHide: true, timeout: OP_TIMEOUT_MS },
+      {
+        env: opEnvironment(env),
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+        timeout: OP_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+      },
       (error, stdout, stderr) => {
         resolve({ error, stdout, stderr });
       },
