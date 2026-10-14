@@ -737,7 +737,8 @@ export class GripClient {
    * The `network` error for a failed attempt; the timeout covers the request and the body read, and the message says
    * which stage it hit. Where the status had arrived before the body read failed, the message and the diagnostic line
    * name it and the error carries it: the platform answered, and a write it answered may have taken effect. The
-   * diagnostic line names the method and the path; the message also names the page.
+   * diagnostic line names the method and the path template; the message names the path as the caller passed it, and
+   * the page.
    */
   #networkError(spec: RequestSpec, error: unknown, signal: AbortSignal, status?: number): NetworkError {
     const seconds = String(REQUEST_TIMEOUT_MS / 1000);
@@ -799,7 +800,7 @@ export class GripClient {
   /**
    * The 401 rows, decided on the status alone, so a body over the cap cannot hide them, by context (issue #5 § The
    * envelope and the classification): an authenticated call is `auth-failed` with the stored session's slug in the
-   * hint, records the failure beside that session and drops the cached token, so the next call reads the config file
+   * hint, records the failure beside that session and drops the cached token, so the next call resolves the token
    * again; the login is `auth-failed` with the credentials hint and records nothing; the config lookup is `api` with
    * the hint naming the refused public bearer and records nothing, because signing in again cannot help. What the
    * platform answers to an expired or invalid session token is not verified (`docs/api/not-verified.md` § Login and
@@ -933,7 +934,7 @@ function refuseBodyOverCap(
   }
 }
 
-/** A 3xx is `api`, decided on the status alone, before any body is read. */
+/** A 3xx is `api`, decided on the status alone: after the body read, whatever the body holds. */
 function refuseRedirect(subject: string, http: string, status: number): void {
   if (status >= 300 && status < 400) {
     // Never followed, and the `Location` value never reaches a message.
