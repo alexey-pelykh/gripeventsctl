@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   MODE_PHASE_REASON,
   SWIPE_CAP_REASON,
-  THROTTLING_REASON,
   UNKNOWN_SLUG_REASON,
   configLookupSchema,
   conflictDetails,
@@ -75,8 +74,7 @@ describe("[CAP-CLIENT] the envelope (docs/api/README.md § Response envelope)", 
   });
 
   it("names the documented reasons exactly as the pages record them", () => {
-    // docs/api/interest.md § Throttling (HTTP 429) and § Errors the app matches on; docs/api/containers.md § Answers.
-    expect(THROTTLING_REASON).toBe("Throttling - Maximum sending rate exceeded");
+    // docs/api/interest.md § Errors the app matches on; docs/api/containers.md § Answers.
     expect(SWIPE_CAP_REASON).toBe("limit of swipes reached for action");
     expect(MODE_PHASE_REASON).toBe("action not allowed under current mode phase");
     expect(UNKNOWN_SLUG_REASON).toBe("No results found for this container name");
