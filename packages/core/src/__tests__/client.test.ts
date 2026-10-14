@@ -3085,6 +3085,33 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
     expect(errors.map((error) => error.kind)).toEqual(FOURTEEN_KINDS);
   });
 
+  it("leaves no leading part of a secret that straddles the excerpt's cut in the message, the hint or bodyExcerpt: the text is redacted before it is cut", async () => {
+    await withSession(async (home) => {
+      const secrets = fixtureSecrets();
+      registerSecret(secrets.applicationToken);
+      // Each value starts eight characters before the cut, so an excerpt cut before it is redacted would keep them.
+      const shapes: [string, string, string][] = [
+        ["a session token after user_token=", " user_token=", secrets.sessionToken],
+        ["a JWT", " ", secrets.chatToken],
+        ["a registered value", " ", secrets.applicationToken],
+      ];
+      const client = newClient(home.env);
+      for (const [label, key, value] of shapes) {
+        const reason = `${"x".repeat(BODY_EXCERPT_LENGTH - 8 - key.length)}${key}${value} tail`;
+        expect(reason.indexOf(value), label).toBe(BODY_EXCERPT_LENGTH - 8);
+        pool()
+          .intercept({ path: "/1/container", method: "GET" })
+          .reply(() => failure(reason, 400));
+        const error = await caught(client.get("container"));
+        expect(error, label).toBeInstanceOf(ApiError);
+        const { message, hint, bodyExcerpt } = error as GripError;
+        for (const [sink, text] of Object.entries({ message, hint, bodyExcerpt: bodyExcerpt ?? "" })) {
+          expect(text, `${label}: ${sink}`).not.toContain(value.slice(0, 8));
+        }
+      }
+    });
+  });
+
   it("owns a status or a bodyExcerpt key only where one was given, never a key holding undefined", () => {
     const local: GripError[] = [
       new NoSessionError(),
