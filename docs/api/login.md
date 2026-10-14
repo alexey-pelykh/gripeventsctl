@@ -31,7 +31,7 @@ Content-Type: application/json
 - Send a desktop browser `User-Agent`, as on every call (see [README.md](README.md#user-agent-rule)).
 
 **Verified live 2026-10-06:** this call produced a working `user_token` at 21:09 on 2026-10-06 for container `9840`.
-Which other headers the login call needs (`login-source`, `X-Grip-Version`, `origin`, `referer`) is not verified.
+Which other headers the login call needs (`Accept`, `login-source`, `X-Grip-Version`, `origin`, `referer`) is not verified (see [not-verified.md](not-verified.md#login-and-session)).
 
 ## Response
 

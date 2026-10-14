@@ -22,6 +22,7 @@ Run them only on the account owner's explicit go-ahead.
 - **Which headers the login call needs** besides `Authorization`, `Content-Type` and a browser `User-Agent` (`Accept`, `login-source`, `X-Grip-Version`, `origin`, `referer`). The client in `@gripeventsctl/core` sends all five on the login. Verify by logging in with each header left out in turn. See [login.md](login.md).
 - **The token lifetime.** A token written at 21:09 on 2026-10-06 still worked at 22:35 that evening and at 07:39 on 2026-10-07, and all that morning. Verify by recording the last time a token works and the first time it fails.
 - **What the API answers to an expired or invalid `user_token`.** The existing clients treat 401 (and the dumper also 403) as an auth failure. Verify by sending a deliberately wrong token to a read-only call and recording the status and body.
+- **What the login call answers when it refuses the credentials.** No page here records it. The client in `@gripeventsctl/core` assumes HTTP 401 and reads a 401 answer to the login as refused credentials (the `auth-failed` kind, with the hint to check the email and the password). Verify with one login using a deliberately wrong password, recording the status and the body. See [login.md](login.md).
 
 ## Containers
 
