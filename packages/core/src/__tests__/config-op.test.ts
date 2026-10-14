@@ -195,28 +195,33 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
     `ends a child that ignores SIGTERM at the timeout, so a hung op never holds the call past the bound${POSIX_ONLY}`,
     async () => {
       // With execFile's default SIGTERM, a child that ignores it keeps the call waiting until it exits on its own,
-      // and an exit 0 then reads as an answer. The real execFile runs here with every option opRead passes, the
-      // timeout alone shortened to 2 s: a freshly written stub takes about 0.3 s to start on macOS, and it must have
-      // recorded the call, and so set its trap, before the timeout fires.
-      const stub = await stubOp("trap '' TERM\nexec sleep 8");
+      // and an exit 0 then reads as an answer: this stub would answer the empty string after 8 s, and opRead would
+      // return it. The real execFile runs here with every option opRead passes, the timeout alone shortened. The stub
+      // writes its marker once its trap is set: a run whose timeout fired before that tells nothing, so it runs again
+      // with a longer timeout. No assertion reads the clock.
+      const markerDir = await mkdtemp(join(tmpdir(), "gripeventsctl-op-trap-"));
+      const marker = join(markerDir, "trapped");
+      const stub = await stubOp(`trap '' TERM\n: > "$OP_TEST_TRAPPED_FILE"\nexec sleep 8`);
       try {
-        const shortened: ExecFileLike = (file, args, options, callback) =>
-          nodeExecFile(file, args, { ...options, timeout: 2_000 }, (error, stdout, stderr) => {
-            callback(error as ExecException | null, stdout, stderr);
-          });
-        const started = Date.now();
-        const error = await expectConfigError(
-          opRead("op://Vault/Item/token", { ...process.env }, { execFile: shortened }),
-        );
-        expect(Date.now() - started).toBeLessThan(6_000);
-        expect(error.message).toBe(
-          "1Password CLI (`op`) did not answer within 120 s while reading op://Vault/Item/token",
-        );
-        expect(await stub.calls()).toHaveLength(1);
+        for (const timeout of [2_000, 5_000, 10_000]) {
+          const shortened: ExecFileLike = (file, args, options, callback) =>
+            nodeExecFile(file, args, { ...options, timeout }, (error, stdout, stderr) => {
+              callback(error as ExecException | null, stdout, stderr);
+            });
+          const env = { ...process.env, OP_TEST_TRAPPED_FILE: marker };
+          const error = await expectConfigError(opRead("op://Vault/Item/token", env, { execFile: shortened }));
+          expect(error.message).toBe(
+            "1Password CLI (`op`) did not answer within 120 s while reading op://Vault/Item/token",
+          );
+          if ((await readdir(markerDir)).includes("trapped")) return;
+        }
+        throw new Error("the stub set no trap before the timeout, even at 10 s: the run tells nothing");
       } finally {
         await stub.remove();
+        await rm(markerDir, { recursive: true, force: true });
       }
     },
+    30_000,
   );
 });
 

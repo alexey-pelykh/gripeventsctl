@@ -136,13 +136,22 @@ describe("the grip_cdp_token shape (issue #5 § Redaction: the JSON key-value fo
 });
 
 describe("redaction over a whole answer body (an error redacts up to the 16 MiB body cap before it cuts the excerpt)", () => {
-  it("redacts 256 KiB of eyJ with no dot in under 1,000 ms, and still replaces a JWT-shaped value after a long eyJ run", () => {
-    const run = "eyJ".repeat(Math.ceil((256 * 1024) / 3));
-    const started = performance.now();
-    const output = redactString(run);
-    const elapsed = performance.now() - started;
-    expect(output).toBe(run);
-    expect(elapsed).toBeLessThan(1_000);
+  it("redacts a run of eyJ with no dot in time linear in its length, and still replaces a JWT-shaped value after a long eyJ run", () => {
+    // The fastest of five passes, after one to warm up: a run eight times as long takes about eight times as long
+    // when the work is linear, and 64 times when it is quadratic. The ratio holds on any machine.
+    const fastest = (run: string): number => {
+      expect(redactString(run)).toBe(run);
+      let best = Number.POSITIVE_INFINITY;
+      for (let pass = 0; pass < 5; pass += 1) {
+        const started = performance.now();
+        redactString(run);
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+    const short = "eyJ".repeat(Math.ceil((8 * 1024) / 3));
+    const run = "eyJ".repeat(Math.ceil((64 * 1024) / 3));
+    expect(fastest(run) / fastest(short)).toBeLessThan(24);
     const { chatToken } = fixtureSecrets();
     // Apart from the run, the token alone goes; joined to it, the match starts at the run's first `eyJ`, as before.
     expect(redactString(`${run} ${chatToken}`)).toBe(`${run} ${REDACTED}`);
