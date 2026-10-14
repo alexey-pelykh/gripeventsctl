@@ -23,6 +23,7 @@ import {
   configLookup200,
   configLookup404,
   conflict409,
+  conflict409InData,
   containerList200,
   fakeClock,
   fixtureSecrets,
@@ -1362,6 +1363,25 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
       expect(conflictError.hint).toContain("x");
       expect(conflictError.hint).toContain("y");
       expect(calls()).toHaveLength(3);
+    });
+  });
+
+  it("a 409 whose array sits in the envelope's own data is conflict too, carrying the array", async () => {
+    // Both shapes are accepted until a live 409 is recorded (docs/api/not-verified.md § Match answers).
+    await withSession(async (home) => {
+      const client = newClient(home.env);
+      pool()
+        .intercept({ path, method: "POST" })
+        .reply(() => conflict409InData(["x"]));
+      const error = await caught(client.post(relative, { message: "" }));
+      expect(error).toBeInstanceOf(ConflictError);
+      const conflictError = error as ConflictError;
+      expect(conflictError.kind).toBe("conflict");
+      expect(conflictError.status).toBe(409);
+      expect(conflictError.details).toEqual(["x"]);
+      expect(conflictError.message).toBe(`POST ${relative}: HTTP 409: x`);
+      expect(conflictError.hint).toBe("x");
+      expect(calls()).toHaveLength(1);
     });
   });
 

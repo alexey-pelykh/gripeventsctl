@@ -82,17 +82,17 @@ export function gatedThingId(reason: string): number | undefined {
 }
 
 /**
- * The `error.data` array of an HTTP 409 (`docs/api/interest.md` § Errors the app matches on), each
- * item as text, or `undefined` where the body does not hold one. The `error.data` location is read
- * from the web app's code and was never seen on the wire (`docs/api/not-verified.md` § Match
- * answers); if the live body carries the array at the top-level `data`, this returns `undefined`
- * and the answer is the `api` kind. An open point with the spec owner.
+ * The array of an HTTP 409 (`docs/api/interest.md` § Errors the app matches on), each item as text,
+ * or `undefined` where the body holds none. Two shapes are accepted (issue #5 § The envelope and the
+ * classification, the 409 row): a top-level `error.data` array, the location the web app's code
+ * reads, and the envelope's own `data` array, which the app's HTTP client may hand its code as
+ * `error.data`. No live 409 is recorded, so both stay accepted until one is
+ * (`docs/api/not-verified.md` § Match answers); where both are present, `error.data` wins.
  */
 export function conflictDetails(body: unknown): string[] | undefined {
   if (!isRecord(body)) return undefined;
   const error = body["error"];
-  if (!isRecord(error)) return undefined;
-  const data = error["data"];
+  const data = isRecord(error) && Array.isArray(error["data"]) ? error["data"] : body["data"];
   if (!Array.isArray(data)) return undefined;
   return data.map((item: unknown) => dataText(item));
 }

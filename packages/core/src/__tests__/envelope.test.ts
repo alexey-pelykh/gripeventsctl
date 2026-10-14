@@ -91,12 +91,19 @@ describe("[CAP-CLIENT] the envelope (docs/api/README.md § Response envelope)", 
     expect(gatedThingId("not authorized")).toBeUndefined();
   });
 
-  it("extracts the error.data array of a 409 and nothing else (docs/api/interest.md § Errors the app matches on)", () => {
+  it("extracts the array of a 409 from error.data or from data, and nothing else (docs/api/interest.md § Errors the app matches on)", () => {
+    // Both shapes are accepted until a live 409 is recorded (docs/api/not-verified.md § Match answers).
     expect(conflictDetails({ error: { data: ["x", "y"] } })).toEqual(["x", "y"]);
     expect(conflictDetails({ error: { data: ["x", 2, { a: 1 }] } })).toEqual(["x", "2", '{"a":1}']);
+    expect(conflictDetails({ success: false, data: ["x"] })).toEqual(["x"]);
+    expect(conflictDetails({ success: false, data: ["x", 2] })).toEqual(["x", "2"]);
+    expect(conflictDetails({ data: [] })).toEqual([]);
+    // Where both shapes are present, the app's own location wins.
+    expect(conflictDetails({ error: { data: ["e"] }, data: ["d"] })).toEqual(["e"]);
     expect(conflictDetails({ error: { data: "x" } })).toBeUndefined();
     expect(conflictDetails({ error: {} })).toBeUndefined();
     expect(conflictDetails({ success: false, data: "x" })).toBeUndefined();
+    expect(conflictDetails({ success: false, data: { x: 1 } })).toBeUndefined();
     expect(conflictDetails("x")).toBeUndefined();
     expect(conflictDetails(undefined)).toBeUndefined();
   });
