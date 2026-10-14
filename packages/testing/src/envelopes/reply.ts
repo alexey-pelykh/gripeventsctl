@@ -15,7 +15,10 @@ export interface GripReply {
 
 export const JSON_HEADERS: Readonly<Record<string, string>> = { "content-type": "application/json" };
 
-/** A JSON reply of `body` on `statusCode`. */
+/**
+ * docs/api/README.md § Response envelope: a JSON answer, `body` on `statusCode`. Each builder that calls this gives
+ * `body` the shape its own page and section record.
+ */
 export function jsonReply(statusCode: number, body: unknown, headers: Record<string, string> = {}): GripReply {
   return { statusCode, data: JSON.stringify(body), responseOptions: { headers: { ...JSON_HEADERS, ...headers } } };
 }
