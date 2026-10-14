@@ -15,14 +15,20 @@ export interface Clock {
   timeoutSignal(ms: number): AbortSignal;
 }
 
-export const systemClock: Clock = {
+/**
+ * Frozen, because a method declared on an interface is writable at compile time and the package entry hands this
+ * object to every importer: `GripClient` falls back to it when no clock is injected, and runs every 429 wait, every
+ * pause between pages and the spacing of profile reads on its `sleep`, and bounds every request on its
+ * `timeoutSignal`. No importer can replace either at run time.
+ */
+export const systemClock: Clock = Object.freeze({
   now: () => new Date(),
-  sleep: (ms) =>
-    new Promise((resolve) => {
+  sleep: (ms: number) =>
+    new Promise<void>((resolve) => {
       setTimeout(resolve, ms);
     }),
-  timeoutSignal: (ms) => AbortSignal.timeout(ms),
-};
+  timeoutSignal: (ms: number) => AbortSignal.timeout(ms),
+});
 
 /** `date` as an ISO 8601 UTC string at second precision, `YYYY-MM-DDTHH:MM:SSZ`: the form the config file holds. */
 export function isoSeconds(date: Date): string {
