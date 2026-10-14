@@ -2007,8 +2007,29 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
       }
       expect(yielded).toEqual([{ id: 1 }]);
       expect(sent).toEqual([
-        "/1/container/1/search/?sort=name&type_id=1,2&page=1",
-        "/1/container/1/search/?sort=name&type_id=1,2&page=2",
+        "/1/container/1/search/?page=1&sort=name&type_id=1,2",
+        "/1/container/1/search/?page=2&sort=name&type_id=1,2",
+      ]);
+    });
+  });
+
+  it("sends `page` first, where docs/api/attendees.md § Directory search records the verified call, and never a `page` of the caller's query", async () => {
+    await withSession(async (home) => {
+      const sent: string[] = [];
+      pool()
+        .intercept({ path: (path) => path.startsWith("/1/container/1/search/?"), method: "GET" })
+        .reply((opts) => {
+          sent.push(opts.path);
+          const page = Number(new URL(opts.path, API_ORIGIN).searchParams.get("page"));
+          return page === 1 ? success200([{ id: 1 }]) : success200([]);
+        })
+        .times(2);
+      // The caller's own `page` key, wherever it stands, gives way to the page the iteration asks for.
+      const query = { sort: "name", page: 9, type_id: "1,2" };
+      for await (const entry of newClient(home.env).pages("container/1/search/", query)) void entry;
+      expect(sent).toEqual([
+        "/1/container/1/search/?page=1&sort=name&type_id=1,2",
+        "/1/container/1/search/?page=2&sort=name&type_id=1,2",
       ]);
     });
   });
