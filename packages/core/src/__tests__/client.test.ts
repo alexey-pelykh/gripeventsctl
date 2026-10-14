@@ -1115,10 +1115,14 @@ describe("[CAP-CLIENT] AC-07 the three 403 answers", () => {
       const gripError = error as GatedTypeError;
       expect(gripError.kind).toBe("gated-type");
       expect(gripError.status).toBe(403);
-      expect(gripError.typeId).toBe(7);
+      // The id the answer names is carried under a neutral name and quoted without calling it a type id: what N in
+      // `thing N not authorized` identifies is not verified (docs/api/not-verified.md § Attendees).
+      expect(gripError.namedId).toBe(7);
+      expect("typeId" in gripError).toBe(false);
       expect(gripError.hint).toContain("read the type set from `events check`");
       expect(gripError.hint).toContain("list with one id per call, stopping at the first id that answers 403");
-      expect(gripError.hint).toContain("7");
+      expect(gripError.hint).toContain("; the answer names id 7");
+      expect(gripError.hint).not.toMatch(/type id 7|type 7/);
       expect(calls()).toHaveLength(1);
     });
   });
@@ -2265,7 +2269,7 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
       new AuthFailedError(`auth ${everySecret}`, options),
       new ThrottledError(`throttled ${everySecret}`, options),
       new SwipeCapError(`cap ${everySecret}`, options),
-      new GatedTypeError(`gated ${everySecret}`, { ...options, typeId: 7 }),
+      new GatedTypeError(`gated ${everySecret}`, { ...options, namedId: 7 }),
       new LoadBalancerRejectedError(`lb ${everySecret}`, options),
       new UnknownSlugError(`slug ${everySecret}`, options),
       new ModePhaseError(`phase ${everySecret}`, options),

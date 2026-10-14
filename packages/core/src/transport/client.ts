@@ -835,9 +835,9 @@ function refuseGatedType(parsed: ParsedAnswer): void {
   const { spec, status, subject, http, envelope } = parsed;
   if (status === 403) {
     const data = envelope?.data;
-    // `thing N not authorized` (`docs/api/attendees.md` § Gated for a normal attendee token): the
-    // page does not say what N identifies. It is carried as `typeId` on the issue's reading ("the
-    // hint names the type id where the body names it"); an open point with the spec owner.
+    // `thing N not authorized` (`docs/api/attendees.md` § Gated for a normal attendee token): what N identifies is
+    // not verified (`docs/api/not-verified.md` § Attendees), so the error carries it as `namedId` and the hint quotes
+    // it as the id the answer names, without calling it a type id (issue #5 § The envelope and the classification).
     if (spec.context === "authenticated" && isDirectorySearchPath(spec.path) && isGatedTypeReason(data)) {
       const named = gatedThingId(data);
       throw new GatedTypeError(
@@ -845,7 +845,7 @@ function refuseGatedType(parsed: ParsedAnswer): void {
         {
           status,
           bodyExcerpt: data,
-          ...(named === undefined ? {} : { typeId: named }),
+          ...(named === undefined ? {} : { namedId: named }),
         },
       );
     }
