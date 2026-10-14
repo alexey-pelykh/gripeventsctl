@@ -21,11 +21,10 @@
  *   at least one character an English word never has (a digit, `+`, `/` or `=`), so prose such as
  *   `Basic Interoperability Guidelines` is neither flagged by the lint nor garbled by `redactString`.
  * - The per-event application token in its key context: `"token"` under a `"general"` key, or
- *   `general.token` (`docs/api/containers.md` § Fields of a 200 answer). The lint matches one line
- *   at a time (`scripts/check-secret-leakage.ts`), so the JSON form is caught only where `"general"`,
- *   the brace and `"token"` share a line: a pretty-printed capture with one key per line is not
- *   flagged by the lint, while `redactString` over the whole text does replace it. Closing that gap
- *   means matching the file as a whole in the lint, a change to the consumer, not to this module.
+ *   `general.token` (`docs/api/containers.md` § Fields of a 200 answer). The key context may sit on
+ *   an earlier line than the value: the lint matches each file as a whole
+ *   (`scripts/check-secret-leakage.ts`), as `redactString` matches the whole text it is given, so a
+ *   pretty-printed capture with one key per line is caught by both.
  *
  * `RUNTIME_ONLY_PATTERN_SOURCES` are applied by `redactString` and never by the lint: a bare
  * `Bearer <token>` is redacted at run time, but the public `docs/api/` pages legitimately print the
