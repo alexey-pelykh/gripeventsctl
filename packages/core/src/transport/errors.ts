@@ -212,16 +212,17 @@ export const GATED_TYPE_HINT =
 export class GatedTypeError extends GripError {
   declare readonly kind: "gated-type";
   /**
-   * The id the body names (`thing N`), where it names one; whether N is a type id or a thing id is not recorded on the
-   * page.
+   * The id the answer names (`thing N`), where it names one. What N identifies is not verified
+   * (`docs/api/not-verified.md` § Attendees), so it is carried under a neutral name and the hint quotes it as the id
+   * the answer names, without calling it a type id.
    */
-  readonly typeId: number | undefined;
+  readonly namedId: number | undefined;
 
-  constructor(message: string, options: GripErrorOptions & { typeId?: number } = {}) {
-    const { typeId, ...rest } = options;
-    const named = typeId === undefined ? "" : `; the answer names id ${String(typeId)}`;
+  constructor(message: string, options: GripErrorOptions & { namedId?: number } = {}) {
+    const { namedId, ...rest } = options;
+    const named = namedId === undefined ? "" : `; the answer names id ${String(namedId)}`;
     super("gated-type", message, `${GATED_TYPE_HINT}${named}`, rest);
-    this.typeId = typeId;
+    this.namedId = namedId;
   }
 }
 
