@@ -47,6 +47,29 @@ export function bodyExcerpt(text: string): string {
   return redactString(text).slice(0, BODY_EXCERPT_LENGTH);
 }
 
+/**
+ * True for a character that can split a line or rewrite one in a terminal or a log reader: a C0 control character
+ * (U+0000 to U+001F), DEL (U+007F), a C1 control character (U+0080 to U+009F), and the line and paragraph separators
+ * U+2028 and U+2029.
+ */
+export function isLineBreakingCode(code: number): boolean {
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029;
+}
+
+/**
+ * `text` with every character `isLineBreakingCode` names written as `\uXXXX`: what a message or a hint holds of a text
+ * the code does not control (an answer's reason or body, a slug the caller passed), so the text stays on one line
+ * wherever the message is printed.
+ */
+export function escapeLineBreaks(text: string): string {
+  let escaped = "";
+  for (const character of text) {
+    const code = character.charCodeAt(0);
+    escaped += isLineBreakingCode(code) ? `\\u${code.toString(16).padStart(4, "0")}` : character;
+  }
+  return escaped;
+}
+
 const CAUSE_DEPTH = 4;
 
 /** The diagnostic properties a system error carries (`node:net`, `node:fs`) that `safeCause` keeps; nothing else. */
@@ -128,11 +151,11 @@ export class ConfigError extends GripError {
 
 /**
  * The sign-in command a hint names: `gripeventsctl auth signin <slug>` with the slug where one is known (the stored
- * session's slug after a 401 on an authenticated call, the slug a login signs in to), and the literal `<slug>` only
- * where none is (issue #5 § The envelope and the classification, the 401 rows).
+ * session's slug after a 401 on an authenticated call, the slug a login signs in to), its line-breaking characters
+ * escaped, and the literal `<slug>` only where none is (issue #5 § The envelope and the classification, the 401 rows).
  */
 export function signInHint(slug?: string): string {
-  return `gripeventsctl auth signin ${slug ?? "<slug>"}`;
+  return `gripeventsctl auth signin ${slug === undefined ? "<slug>" : escapeLineBreaks(slug)}`;
 }
 
 /** The sign-in hint where no slug is known: what `NoSessionError` names. */
@@ -295,18 +318,21 @@ export function conflictText(details: readonly string[]): string | undefined {
   return details.some((detail) => detail.trim() !== "") ? details.join("; ") : undefined;
 }
 
-/** The hint of a 409 whose caller names none: the array's text as an excerpt, or the status where it holds no text. */
+/**
+ * The hint of a 409 whose caller names none: the array's text as an excerpt with its line-breaking characters
+ * escaped, or the status where it holds no text.
+ */
 function conflictHint(details: readonly string[], status: number): string {
   const text = conflictText(details);
-  return text === undefined ? `HTTP ${String(status)}` : bodyExcerpt(text);
+  return text === undefined ? `HTTP ${String(status)}` : escapeLineBreaks(bodyExcerpt(text));
 }
 
 /**
  * HTTP 409 with a body holding an array, under `error.data` or as the envelope's own `data`; the array is the hint,
- * as the app shows it, cut to the excerpt length like every hint built from a body, or `HTTP 409` where the array
- * holds no text, unless the caller names the hint (the transport client passes the excerpt it already cut), while
- * `details` keeps every item whole for the write items to read. The status is 409 unless the caller names another.
- * Exit code 1.
+ * as the app shows it, cut to the excerpt length and with its line-breaking characters escaped like every hint built
+ * from a body, or `HTTP 409` where the array holds no text, unless the caller names the hint (the transport client
+ * passes the excerpt it already cut), while `details` keeps every item whole for the write items to read. The status
+ * is 409 unless the caller names another. Exit code 1.
  */
 export class ConflictError extends GripError {
   declare readonly kind: "conflict";
