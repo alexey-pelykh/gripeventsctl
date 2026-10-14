@@ -83,13 +83,15 @@ export const SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE =
   ")";
 
 /**
- * The same pair with the value first (`"value": "<uuid>", "name": "X-Authorization"`): the header name follows the
- * token, in a lookahead. Groups: the value's key up to its opening quote, the token.
+ * The same pair with the value first (`"value": "<uuid>", "name": "X-Authorization"`). The match runs on to the header
+ * name after the token, so every match of every shape holds its whole key context, and a reader that redacts a match
+ * alone, as the leakage lint does for the prefix it prints, finds the value. Groups: the value's key up to its opening
+ * quote, the token, the rest of the pair up to the header name.
  */
 export const SESSION_TOKEN_VALUE_NAME_PATTERN_SOURCE =
   String.raw`("value${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
   UUID_PATTERN_SOURCE +
-  String.raw`)(?=${QUOTE_SOURCE}\s*,\s*${QUOTE_SOURCE}name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization${QUOTE_SOURCE})`;
+  String.raw`)(${QUOTE_SOURCE}\s*,\s*${QUOTE_SOURCE}name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization)`;
 
 /**
  * At least `count` of the one-character class `characterClass`, as `X{count}X*`. `X{count,}` matches

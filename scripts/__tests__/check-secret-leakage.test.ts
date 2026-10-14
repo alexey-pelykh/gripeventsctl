@@ -35,6 +35,13 @@ interface Secrets {
 const BEARER_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 /**
+ * The shortest run of a fixture value a printed prefix must not hold. A prefix of the raw match held five characters
+ * of the application token after `Bearer `, six of the Basic value after `Basic ` and the first twelve of the chat
+ * token; a run this long of a value generated per run is not expected in the fixed text of a redacted prefix.
+ */
+const RUN = 5;
+
+/**
  * A per-run 32-character value of letters and digits: the shape of the public bootstrap bearer
  * `docs/api/containers.md` prints, so the case keeps proving that a bare `Bearer <value>` line is
  * unflagged by the lint, without committing the platform's real value. Never JWT-shaped.
@@ -174,7 +181,7 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(result.stderr).toContain("FAIL: found");
   });
 
-  it("R16: prints at most a 12-character prefix of a match, never the value", () => {
+  it("R16: prints at most a 12-character prefix of a match, never the value nor a run of it", () => {
     const secrets = fixtureSecrets();
     for (const [name, content] of Object.entries(shapedFiles(secrets))) write(`fixtures/${name}`, content);
     commitAll();
@@ -188,8 +195,15 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
       const match = /secret-shaped value: (.*)… \((\d+) chars\)$/u.exec(line);
       expect(match, line).not.toBeNull();
       if (match === null) continue;
-      expect(match[1]?.length ?? 0).toBeLessThanOrEqual(12);
+      const prefix = match[1] ?? "";
+      expect(prefix.length).toBeLessThanOrEqual(12);
       expect(Number(match[2])).toBeGreaterThan(12);
+      // The prefix is the redacted match: no run of five characters of any fixture value is in it.
+      for (const [name, value] of Object.entries(secrets)) {
+        for (let start = 0; start + RUN <= value.length; start += 1) {
+          expect(prefix, `${line} holds a run of the ${name}`).not.toContain(value.slice(start, start + RUN));
+        }
+      }
     }
     for (const value of Object.values(secrets)) {
       expect(result.stderr).not.toContain(value);
