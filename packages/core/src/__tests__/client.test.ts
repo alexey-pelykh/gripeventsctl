@@ -81,6 +81,7 @@ import {
   ThrottledError,
   UnknownSlugError,
   UsageError,
+  LOOKUP_BEARER_REFUSED_HINT,
   WIRE_BREAKAGE_HINT,
   WriteRefusedError,
 } from "../transport/errors.js";
@@ -1296,21 +1297,29 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
     });
   });
 
-  it("a 401 on the config lookup is auth-failed with the wire-breakage hint: the bootstrap bearer was refused, nothing is recorded, no login", async () => {
-    // With a session in the config file, so a failure wrongly recorded against it would show.
+  it("a 401 on the config lookup is api, not auth-failed, with the hint naming the refused public bearer; nothing is recorded, no login (AC-22)", async () => {
+    // Signing in again cannot help a refused public bearer (issue #5, the 401 rows). With a session in the config
+    // file, so a failure wrongly recorded against it would show.
     await withSession(async (home) => {
       const recordsBefore = recordAuthFailureMock.mock.calls.length;
       pool()
         .intercept({ path: "/1/config?container_name=test-event-1", method: "GET" })
         .reply(() => failure("synthetic unauthorized 1", 401));
       const error = await caught(newClient(home.env).lookupConfig("test-event-1"));
-      expect(error).toBeInstanceOf(AuthFailedError);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).not.toBeInstanceOf(AuthFailedError);
       const gripError = error as GripError;
-      expect(gripError.kind).toBe("auth-failed");
+      expect(gripError.kind).toBe("api");
       expect(gripError.status).toBe(401);
-      expect(gripError.hint).toBe(WIRE_BREAKAGE_HINT);
-      expect(gripError.hint).toBe("update the tool, or report it with the wire-breakage issue template");
-      expect(gripError.message).toContain("the public bootstrap bearer was refused");
+      expect(gripError.hint).toBe(LOOKUP_BEARER_REFUSED_HINT);
+      expect(gripError.hint).toBe(
+        "the platform refused the public lookup bearer; update the tool, or report it with the wire-breakage issue template",
+      );
+      expect(gripError.hint).toContain(WIRE_BREAKAGE_HINT);
+      expect(gripError.message).toBe(
+        "GET config: HTTP 401: synthetic unauthorized 1; the public bootstrap bearer was refused",
+      );
+      expect(gripError.bodyExcerpt).toBe("synthetic unauthorized 1");
       expect(calls()).toHaveLength(1);
       expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
       expect(recordAuthFailureMock.mock.calls.length - recordsBefore).toBe(0);
@@ -1321,8 +1330,43 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
       pool()
         .intercept({ path: "/1/config?container_name=test-event-1", method: "GET" })
         .reply(() => failure("synthetic unauthorized 1", 401));
-      expect(await caught(newClient(home.env).lookupConfig("test-event-1"))).toBeInstanceOf(AuthFailedError);
+      const error = await caught(newClient(home.env).lookupConfig("test-event-1"));
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as GripError).kind).toBe("api");
       expect((await loadConfig({ env: home.env })).exists).toBe(false);
+    });
+  });
+
+  it("drops the cached token after the 401, so a sign-in stored while the same client lives is used on its next call (AC-22)", async () => {
+    await withSession(async (home, secrets) => {
+      const clock = fakeClock("2026-10-13T08:12:00Z");
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => failure("synthetic unauthorized 1", 401));
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => containerList200());
+      const client = newClient(home.env, { clock });
+      const error = await caught(client.get("container"));
+      expect(error).toBeInstanceOf(AuthFailedError);
+      expect((error as GripError).hint).toBe(`gripeventsctl auth signin ${SESSION_SLUG}`);
+      // The cache is empty: the client holds neither the token nor the session it came from.
+      expect(privateStateForTest(client)["token"]).toBeUndefined();
+      expect(privateStateForTest(client)["sessionIdentity"]).toBeUndefined();
+
+      // The user signs in again (session B, another token) while this client lives, as the MCP server does.
+      const other = fixtureSecrets();
+      await saveSession(
+        { slug: SESSION_SLUG, container_id: 1, token: other.sessionToken },
+        { env: home.env, clock: fakeClock("2026-10-13T08:20:00Z") },
+      );
+      await client.get("container");
+      expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
+        secrets.sessionToken,
+        other.sessionToken,
+      ]);
+      expect(calls().some((call) => call.path === "/1/user/account/login")).toBe(false);
+      expect(privateStateForTest(client)["token"]).toBe(other.sessionToken);
     });
   });
 });
