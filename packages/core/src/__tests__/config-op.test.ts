@@ -195,13 +195,14 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
     `ends a child that ignores SIGTERM at the timeout, so a hung op never holds the call past the bound${POSIX_ONLY}`,
     async () => {
       // With execFile's default SIGTERM, a child that ignores it keeps the call waiting until it exits on its own,
-      // and an exit 0 then reads as an answer: this stub would answer the empty string after 8 s, and opRead would
+      // and an exit 0 then reads as an answer: this stub would answer the empty string after 12 s, and opRead would
       // return it. The real execFile runs here with every option opRead passes, the timeout alone shortened. The stub
       // writes its marker once its trap is set: a run whose timeout fired before that tells nothing, so it runs again
-      // with a longer timeout. No assertion reads the clock.
+      // with a longer timeout. Every timeout is shorter than the stub's sleep, so a run ends at its timeout and never
+      // by the stub's own exit, however late the trap was set on an earlier run. No assertion reads the clock.
       const markerDir = await mkdtemp(join(tmpdir(), "gripeventsctl-op-trap-"));
       const marker = join(markerDir, "trapped");
-      const stub = await stubOp(`trap '' TERM\n: > "$OP_TEST_TRAPPED_FILE"\nexec sleep 8`);
+      const stub = await stubOp(`trap '' TERM\n: > "$OP_TEST_TRAPPED_FILE"\nexec sleep 12`);
       try {
         for (const timeout of [2_000, 5_000, 10_000]) {
           const shortened: ExecFileLike = (file, args, options, callback) =>
