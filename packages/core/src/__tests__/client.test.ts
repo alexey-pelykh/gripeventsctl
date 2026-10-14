@@ -442,6 +442,9 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
         "container/1/./search/",
         "./container/1/search/",
         "container/1/search/#x",
+        // A fragment after the query: the URL parser moves it out of the query, and fetch never sends it.
+        "container/1/search/?search=C#",
+        "container/1/thing/6?x=1#frag",
         "container/1/thing/%2e/6",
         // A server may decode a percent-encoded character, while the per-path rules read the encoded spelling: thing 6
         // as `%36`, the search as `%73earch` or with its slash as `%2F`. No documented path holds a "%".
