@@ -716,6 +716,78 @@ describe("[CAP-CLIENT] AC-02 the header set on authenticated calls", () => {
       });
     },
   );
+
+  it("refuses, before any request, a stored session token that is empty or not a valid header value, as the config kind naming the config file and never the token", async () => {
+    // fetch would cut the HTTP whitespace at the ends of the value and refuse one holding a CR, an LF or a NUL (undici
+    // 8.11.2, lib/web/fetch/util.js), the dispatcher any other character outside tab, 0x20 to 0x7E and 0x80 to 0xFF
+    // (lib/core/util.js), and an empty value would go out as it is: none of them is a fault of the connection.
+    const invalid = "is not a valid header value";
+    const shapes: [string, (uuid: string) => string, string][] = [
+      ["a line break inside", (uuid) => ` ${uuid}\nnote`, invalid],
+      ["a line break inside and one at the end", (uuid) => `${uuid}\nnote\n`, invalid],
+      ["a NUL", (uuid) => `${uuid}\u0000`, invalid],
+      ["a DEL", (uuid) => `${uuid}\u007f`, invalid],
+      ["an escape", (uuid) => `\u001b[2K${uuid}`, invalid],
+      ["a character above U+00FF", (uuid) => `${uuid}€`, invalid],
+      ["only whitespace", () => " \t\r\n ", "is empty"],
+    ];
+    for (const [label, shape, what] of shapes) {
+      await withTempHome(async (home) => {
+        const uuid = randomUUID();
+        await saveConfig(sessionConfig(shape(uuid)), { env: home.env });
+        const stderr = stderrSink();
+        const error = await caught(newClient(home.env, { stderr: stderr.stream }).get("container"));
+        expect(error, label).toBeInstanceOf(ConfigError);
+        const gripError = error as GripError;
+        expect(gripError.kind, label).toBe("config");
+        expect(gripError.message, label).toBe(`the session token stored in ${home.configFile} ${what}`);
+        expect(gripError.hint, label).toBe(`run \`gripeventsctl auth signin ${SESSION_SLUG}\` to store a new session`);
+        const texts: Record<string, string> = {
+          message: gripError.message,
+          string: String(error),
+          json: JSON.stringify(error),
+          inspect: inspect(error),
+        };
+        for (const [sink, text] of Object.entries(texts)) expect(text, `${label}: ${sink}`).not.toContain(uuid);
+        expect(stderr.text(), label).toBe("");
+        expect(calls(), label).toHaveLength(0);
+      });
+    }
+  });
+
+  it.skipIf(!STUB_OP_SUPPORTED)(
+    `refuses, before any request, an empty session token read through an op:// reference, naming the reference, and resolves it again on the next call${POSIX_ONLY}`,
+    async () => {
+      await withTempHome(async (home) => {
+        // `op read` exits 0 with a line break only: opRead cuts one trailing line break and returns the empty string.
+        const stub = await stubOp("printf '\\n'");
+        try {
+          const env = { ...home.env, PATH: stub.path };
+          const reference = "op://Vault/Item/token";
+          await saveSession(
+            { slug: SESSION_SLUG, container_id: 1, token: reference },
+            { env, clock: fakeClock("2026-10-13T07:00:00Z") },
+          );
+          const client = newClient(env);
+          for (const call of [1, 2]) {
+            const error = await caught(client.get("container"));
+            expect(error, String(call)).toBeInstanceOf(ConfigError);
+            expect((error as GripError).message, String(call)).toBe(
+              `the session token read from ${reference} is empty`,
+            );
+            expect((error as GripError).hint, String(call)).toBe(
+              `check that ${reference} holds the session token, or run \`gripeventsctl auth signin ${SESSION_SLUG}\` to store a new session`,
+            );
+          }
+          // The empty token was never cached: the second call ran op read again.
+          expect(await stub.calls()).toHaveLength(2);
+          expect(calls()).toHaveLength(0);
+        } finally {
+          await stub.remove();
+        }
+      });
+    },
+  );
 });
 
 describe("[CAP-CLIENT] AC-03 the config lookup by slug (docs/api/containers.md § Config by slug)", () => {
@@ -2557,35 +2629,6 @@ describe("[CAP-CLIENT] AC-14 the request timeout and the body cap", () => {
       expect(stderr.text()).toContain("the request failed: fetch failed (UND_MOCK_ERR_MOCK_NOT_MATCHED: ");
       expect(stderr.text()).toContain(inner.message);
     });
-  });
-
-  it("keeps a stored session token that fetch refuses as a header value out of the diagnostic line and the error", async () => {
-    // fetch strips HTTP whitespace from both ends of a header value, then refuses one holding a CR, an LF or a NUL,
-    // quoting the stripped value in its message (undici 8.11.2, lib/web/fetch/headers.js); the request is never sent.
-    for (const shape of [(uuid: string) => ` ${uuid}\nnote`, (uuid: string) => `${uuid}\nnote\n`]) {
-      await withTempHome(async (home) => {
-        const uuid = randomUUID();
-        await saveConfig(sessionConfig(shape(uuid)), { env: home.env });
-        const stderr = stderrSink();
-        const error = await caught(newClient(home.env, { stderr: stderr.stream }).get("container"));
-        expect(error).toBeInstanceOf(NetworkError);
-        const gripError = error as GripError;
-        expect(gripError.kind).toBe("network");
-        expect(gripError.hint).toBe("check the connection");
-        expect(gripError.message).toContain("is an invalid header value");
-        const cause = gripError.cause as Error | undefined;
-        const texts: Record<string, string> = {
-          stderr: stderr.text(),
-          message: gripError.message,
-          string: String(error),
-          json: JSON.stringify(error),
-          causeMessage: cause?.message ?? "",
-          causeStack: cause?.stack ?? "",
-        };
-        for (const [sink, text] of Object.entries(texts)) expect(text, sink).not.toContain(uuid);
-        expect(calls()).toHaveLength(0);
-      });
-    }
   });
 
   it("keeps the failure's own frames, redacted, and its errno, syscall, path, address and port on the cause it carries", async () => {
