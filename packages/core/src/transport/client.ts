@@ -78,6 +78,8 @@ import {
   bodyExcerpt,
   conflictText,
   errorCode,
+  escapeLineBreaks,
+  isLineBreakingCode,
   signInHint,
 } from "./errors.js";
 import { BASE_URL, type HeaderSet, authenticatedHeaders, loginHeaders, lookupHeaders } from "./headers.js";
@@ -110,15 +112,6 @@ const HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
 /** The path part of `BASE_URL`: what every request path starts with. */
 const BASE_PATH = new URL(BASE_URL).pathname;
 
-/**
- * True for a character that can split a line or rewrite one in a terminal or a log reader: a C0 control character
- * (U+0000 to U+001F), DEL (U+007F), a C1 control character (U+0080 to U+009F), and the line and paragraph separators
- * U+2028 and U+2029.
- */
-function isLineBreakingCode(code: number): boolean {
-  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029;
-}
-
 /** True where `text` holds a character `isLineBreakingCode` names. */
 function holdsControlCharacter(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
@@ -128,17 +121,16 @@ function holdsControlCharacter(text: string): boolean {
 }
 
 /**
- * `path` quoted for a message, passed through `redactString`: JSON string syntax, with every character
- * `isLineBreakingCode` names escaped as `\uXXXX`. `JSON.stringify` escapes the C0 range only and leaves DEL, the C1
- * range and the two separators raw.
+ * `text` quoted for a message: JSON string syntax, with every character `isLineBreakingCode` names escaped as
+ * `\uXXXX`. `JSON.stringify` escapes the C0 range only and leaves DEL, the C1 range and the two separators raw.
  */
+function quoted(text: string): string {
+  return escapeLineBreaks(JSON.stringify(text));
+}
+
+/** `path` quoted for a message, then passed through `redactString`. */
 function quotedPath(path: string): string {
-  let quoted = "";
-  for (const character of JSON.stringify(path)) {
-    const code = character.charCodeAt(0);
-    quoted += isLineBreakingCode(code) ? `\\u${code.toString(16).padStart(4, "0")}` : character;
-  }
-  return redactString(quoted);
+  return redactString(quoted(path));
 }
 
 export interface GripClientOptions {
@@ -572,7 +564,8 @@ export class GripClient {
     if (schema === undefined) return data as T;
     const result = schema.safeParse(data);
     if (result.success) return result.data;
-    const reason = schemaFailureMessage(result.error);
+    // An issue's path may hold a key of the answer: the line names it with its line-breaking characters escaped.
+    const reason = escapeLineBreaks(schemaFailureMessage(result.error));
     throw new ApiError(`${subjectOf(spec)}: ${reason}`, reason, { status });
   }
 
@@ -810,10 +803,10 @@ export class GripClient {
    * again; the login is `auth-failed` with the credentials hint and records nothing; the config lookup is `api` with
    * the hint naming the refused public bearer and records nothing, because signing in again cannot help. What the
    * platform answers to an expired or invalid session token is not verified (`docs/api/not-verified.md` § Login and
-   * session). Where the body is under the cap, the reason's excerpt is the message tail and `bodyExcerpt`; an answer
-   * that gives no reason (`data` empty or only whitespace, JSON that is not the envelope, a page that is not JSON) ends
-   * the message at the status and carries its body text as `bodyExcerpt`, as the unexpected-answer row does. A body
-   * over the cap gives no excerpt.
+   * session). Where the body is under the cap, the reason's excerpt is `bodyExcerpt` and, with its line-breaking
+   * characters escaped, the message tail; an answer that gives no reason (`data` empty or only whitespace, JSON that is
+   * not the envelope, a page that is not JSON) ends the message at the status and carries its body text as
+   * `bodyExcerpt`, as the unexpected-answer row does. A body over the cap gives no excerpt.
    */
   async #refuseUnauthorized(
     spec: RequestSpec,
@@ -825,7 +818,7 @@ export class GripClient {
     if (status !== 401) return;
     const reason = text === undefined ? undefined : reasonOf(text);
     const detail = reason === undefined || reason === "" ? undefined : bodyExcerpt(reason);
-    const message = `${subject}: ${http}${detail === undefined ? "" : `: ${detail}`}`;
+    const message = `${subject}: ${http}${detail === undefined ? "" : `: ${escapeLineBreaks(detail)}`}`;
     const excerpt = text === undefined ? {} : { bodyExcerpt: detail ?? text };
     if (spec.context === "login") {
       throw new AuthFailedError(`${message}; the login was refused`, {
@@ -984,10 +977,11 @@ function refuseGatedType(parsed: ParsedAnswer): void {
     // it as the id the answer names, without calling it a type id (issue #5 § The envelope and the classification).
     if (spec.context === "authenticated" && isDirectorySearchPath(spec.path) && isGatedTypeReason(data)) {
       const named = gatedThingId(data);
-      // Redacted and cut once: the message quotes the excerpt, and `bodyExcerpt` is the same excerpt.
+      // Redacted and cut once: `bodyExcerpt` is the excerpt, and the message quotes it with its line-breaking
+      // characters escaped.
       const excerpt = bodyExcerpt(data);
       throw new GatedTypeError(
-        `${subject}: ${http} ${JSON.stringify(excerpt)}: the type set includes a type this session cannot list`,
+        `${subject}: ${http} ${quoted(excerpt)}: the type set includes a type this session cannot list`,
         {
           status,
           bodyExcerpt: excerpt,
@@ -1039,13 +1033,14 @@ function refuseConflict(parsed: ParsedAnswer): void {
     if (details !== undefined) {
       // An array whose entries hold no text gives no reason (issue #5, the 409 row): the message ends at the status
       // and the error's hint is the status, while `bodyExcerpt` keeps the joined array. Any entry with text keeps the
-      // joined array in the message and the hint. The joined array is redacted and cut once, and all three reuse it.
+      // joined array in the message and the hint. The joined array is redacted and cut once: `bodyExcerpt` is the
+      // excerpt, and the message tail and the hint hold it with its line-breaking characters escaped.
       const excerpt = bodyExcerpt(details.join("; "));
-      const hasText = conflictText(details) !== undefined;
-      throw new ConflictError(`${subject}: ${http}${hasText ? `: ${excerpt}` : ""}`, details, {
+      const shown = conflictText(details) === undefined ? undefined : escapeLineBreaks(excerpt);
+      throw new ConflictError(`${subject}: ${http}${shown === undefined ? "" : `: ${shown}`}`, details, {
         status,
         bodyExcerpt: excerpt,
-        hint: hasText ? excerpt : http,
+        hint: shown ?? http,
       });
     }
   }
@@ -1055,7 +1050,7 @@ function refuseConflict(parsed: ParsedAnswer): void {
 function refuseUnknownSlug(parsed: ParsedAnswer): void {
   const { spec, status, reason } = parsed;
   if (status === 404 && spec.context === "lookup" && reason === UNKNOWN_SLUG_REASON) {
-    throw new UnknownSlugError(`no container has the slug ${JSON.stringify(spec.slug ?? "")}`, {
+    throw new UnknownSlugError(`no container has the slug ${quoted(spec.slug ?? "")}`, {
       status,
       bodyExcerpt: reason,
     });
@@ -1081,22 +1076,23 @@ function successOf(parsed: ParsedAnswer): Classified | undefined {
 /** The rest is `api`: the reason's excerpt where the answer gives a reason, the unexpected answer otherwise. */
 function unclassifiedError(parsed: ParsedAnswer): ApiError {
   const { status, text, subject, http, reason } = parsed;
-  // Every message tail and hint built from a body or a reason is the redacted 200-character excerpt,
-  // the same `bodyExcerpt` carries; a 16 MiB `data` never lands in a message.
+  // Every message tail and hint built from a body or a reason is the redacted 200-character excerpt `bodyExcerpt`
+  // carries, with its line-breaking characters escaped; a 16 MiB `data` never lands in a message.
   if (reason !== undefined) return reasonError(subject, http, status, reason, text);
   return unexpectedAnswerError(subject, http, status, text);
 }
 
 /**
  * The `api` error of a `success: false` answer, the table's row "any other `success: false`": the reason's excerpt,
- * redacted and cut once, is the message tail, the hint and `bodyExcerpt`. Where the answer gives no reason (`data`
- * absent, empty or only whitespace), the hint is the status, the message ends at the status, and `bodyExcerpt`
- * carries the body text, as it does for an unexpected answer.
+ * redacted and cut once, is `bodyExcerpt`, and with its line-breaking characters escaped, the message tail and the
+ * hint. Where the answer gives no reason (`data` absent, empty or only whitespace), the hint is the status, the
+ * message ends at the status, and `bodyExcerpt` carries the body text, as it does for an unexpected answer.
  */
 function reasonError(subject: string, http: string, status: number, reason: string, text: string): ApiError {
   if (reason === "") return new ApiError(`${subject}: ${http}`, http, { status, bodyExcerpt: text });
   const excerpt = bodyExcerpt(reason);
-  return new ApiError(`${subject}: ${http}: ${excerpt}`, excerpt, { status, bodyExcerpt: excerpt });
+  const shown = escapeLineBreaks(excerpt);
+  return new ApiError(`${subject}: ${http}: ${shown}`, shown, { status, bodyExcerpt: excerpt });
 }
 
 /** The `api` error of an answer no other row matched: the status as the hint, the body only as the excerpt. */

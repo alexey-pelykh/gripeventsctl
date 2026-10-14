@@ -175,6 +175,16 @@ function bodyText(body: unknown): string {
   return String(body);
 }
 
+/**
+ * The codes in `text` of every character that splits a line or rewrites one in a terminal or a log reader: C0, DEL, C1
+ * and the two separators U+2028 and U+2029.
+ */
+function lineBreaking(text: string): number[] {
+  return Array.from(text, (character) => character.charCodeAt(0)).filter(
+    (code) => code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029,
+  );
+}
+
 async function settle(): Promise<void> {
   for (let i = 0; i < 8; i += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -478,18 +488,13 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
         "container?search=a\u0085GET container: 200",
         "container?search=a\u2028GET container: 200",
       ];
-      // Every character that splits a line or rewrites one in a terminal or a log reader.
-      const breaking = (text: string): number[] =>
-        Array.from(text, (character) => character.charCodeAt(0)).filter(
-          (code) => code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029,
-        );
       for (const path of forged) {
         const label = JSON.stringify(path).replaceAll("\u007f", "\\u007f");
-        expect(breaking(path), label).not.toEqual([]);
+        expect(lineBreaking(path), label).not.toEqual([]);
         const error = await caught(client.get(path));
         expect(error, label).toBeInstanceOf(TypeError);
         // The refusal quotes the path with each of them escaped, DEL and the C1 range included.
-        expect(breaking((error as Error).message), label).toEqual([]);
+        expect(lineBreaking((error as Error).message), label).toEqual([]);
       }
       // A path that leaves the base is quoted the same way.
       const leaving = await caught(client.get("/container\u007f"));
@@ -1236,6 +1241,77 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
       );
       expect(conflictError.bodyExcerpt).toHaveLength(BODY_EXCERPT_LENGTH);
       expect(calls()).toHaveLength(3);
+    });
+  });
+
+  it("escapes every line-breaking character of server text in a message and a hint, while bodyExcerpt keeps the text as sent, redacted and cut", async () => {
+    await withSession(async (home) => {
+      // A line feed and an escape (C0), DEL, NEL (C1) and the line separator: each splits a line, or rewrites one, in a
+      // terminal or a log reader.
+      const forged = "first\nGET container: 200\u001b[2K\u007f\u0085\u2028end";
+      const escaped = String.raw`first\u000aGET container: 200\u001b[2K\u007f\u0085\u2028end`;
+      const client = newClient(home.env);
+      const cases: [string, () => Promise<unknown>, string, string, () => GripReply][] = [
+        ["a success: false reason", () => client.get("container"), "/1/container", "GET", () => failure(forged, 400)],
+        ["a JSON 403 reason", () => client.get("container"), "/1/container", "GET", () => failure(forged, 403)],
+        ["a 401 reason", () => client.get("container"), "/1/container", "GET", () => failure(forged, 401)],
+        ["a 409 array", () => client.post(WRITE_PATH, {}), WRITE_WIRE_PATH, "POST", () => conflict409([forged])],
+        [
+          "a gated-type answer",
+          () => client.get("container/1/search/"),
+          "/1/container/1/search/",
+          "GET",
+          () => failure(`thing 7 not authorized ${forged}`, 403),
+        ],
+        [
+          "a key of the answer that the caller's schema refuses",
+          () => client.get("container", { schema: z.record(z.string(), z.number()) }),
+          "/1/container",
+          "GET",
+          () => success200({ [forged]: "not a number" }),
+        ],
+      ];
+      for (const [label, call, path, method, reply] of cases) {
+        pool().intercept({ path, method }).reply(reply);
+        const error = await caught(call());
+        expect(error, label).toBeInstanceOf(GripError);
+        const { message, hint, bodyExcerpt } = error as GripError;
+        expect(lineBreaking(message), `${label}: message`).toEqual([]);
+        expect(lineBreaking(hint), `${label}: hint`).toEqual([]);
+        // JSON quoting writes the line feed and the escape its own way; every other character is escaped as \uXXXX.
+        expect(message, label).toContain(String.raw`\u007f\u0085\u2028end`);
+        if (!label.startsWith("a gated-type")) expect(message, label).toContain(escaped);
+        if (bodyExcerpt !== undefined && !label.startsWith("a key")) expect(bodyExcerpt, label).toContain(forged);
+      }
+
+      // The caller's own slug is escaped the same way where a message or a hint names it, as the caller's path is.
+      const slug = "test\u0085event\u2028x";
+      pool()
+        .intercept({ path: (requested) => requested.startsWith("/1/config?container_name="), method: "GET" })
+        .reply(() => configLookup404());
+      const unknown = await caught(client.lookupConfig(slug));
+      expect(unknown).toBeInstanceOf(UnknownSlugError);
+      expect((unknown as GripError).message).toBe(String.raw`no container has the slug "test\u0085event\u2028x"`);
+      pool()
+        .intercept({ path: "/1/user/account/login", method: "POST" })
+        .reply(() => failure("synthetic unauthorized 3", 401));
+      const secrets = fixtureSecrets();
+      const refused = await caught(
+        client.login({
+          applicationToken: secrets.applicationToken,
+          containerId: 1,
+          email: secrets.email,
+          password: secrets.password,
+          slug,
+        }),
+      );
+      expect(refused).toBeInstanceOf(AuthFailedError);
+      expect((refused as GripError).hint).toBe(
+        String.raw`check the email and the password, then run ` +
+          "`gripeventsctl auth signin " +
+          String.raw`test\u0085event\u2028x` +
+          "` again",
+      );
     });
   });
 
