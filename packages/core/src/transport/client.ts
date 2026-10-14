@@ -810,7 +810,10 @@ export class GripClient {
    * again; the login is `auth-failed` with the credentials hint and records nothing; the config lookup is `api` with
    * the hint naming the refused public bearer and records nothing, because signing in again cannot help. What the
    * platform answers to an expired or invalid session token is not verified (`docs/api/not-verified.md` § Login and
-   * session). The excerpt is the reason where the body is under the cap, and none where it was cut.
+   * session). Where the body is under the cap, the reason's excerpt is the message tail and `bodyExcerpt`; an answer
+   * that gives no reason (`data` empty or only whitespace, JSON that is not the envelope, a page that is not JSON) ends
+   * the message at the status and carries its body text as `bodyExcerpt`, as the unexpected-answer row does. A body
+   * over the cap gives no excerpt.
    */
   async #refuseUnauthorized(
     spec: RequestSpec,
@@ -821,9 +824,9 @@ export class GripClient {
   ): Promise<void> {
     if (status !== 401) return;
     const reason = text === undefined ? undefined : reasonOf(text);
-    const detail = reason === undefined ? "" : bodyExcerpt(reason);
-    const message = `${subject}: ${http}${detail === "" ? "" : `: ${detail}`}`;
-    const excerpt = text === undefined ? {} : { bodyExcerpt: detail };
+    const detail = reason === undefined || reason === "" ? undefined : bodyExcerpt(reason);
+    const message = `${subject}: ${http}${detail === undefined ? "" : `: ${detail}`}`;
+    const excerpt = text === undefined ? {} : { bodyExcerpt: detail ?? text };
     if (spec.context === "login") {
       throw new AuthFailedError(`${message}; the login was refused`, {
         status,

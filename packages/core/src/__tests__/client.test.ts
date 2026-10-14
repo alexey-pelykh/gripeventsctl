@@ -1443,6 +1443,45 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
     });
   });
 
+  it("carries the body text as bodyExcerpt where a 401 gives no reason, on an authenticated call, the login and the lookup alike", async () => {
+    await withSession(async (home, secrets) => {
+      // No reason: an empty or whitespace `data`, JSON that is not the envelope, a page that is not JSON.
+      const bodies: [string, string, string][] = [
+        ["an empty reason", JSON.stringify({ success: false, data: "" }), "application/json"],
+        ["a whitespace reason", JSON.stringify({ success: false, data: "  \n" }), "application/json"],
+        ["JSON that is not the envelope", JSON.stringify({ error: "synthetic unauthorized 2" }), "application/json"],
+        ["a page that is not JSON", "<html>Unauthorized</html>", "text/html"],
+      ];
+      const client = newClient(home.env);
+      for (const [label, body, type] of bodies) {
+        const reply = (): GripReply => ({
+          statusCode: 401,
+          data: body,
+          responseOptions: { headers: { "content-type": type } },
+        });
+        pool().intercept({ path: "/1/container", method: "GET" }).reply(reply);
+        pool().intercept({ path: "/1/user/account/login", method: "POST" }).reply(reply);
+        pool().intercept({ path: "/1/config?container_name=test-event-1", method: "GET" }).reply(reply);
+        const login = {
+          applicationToken: secrets.applicationToken,
+          containerId: 1,
+          email: secrets.email,
+          password: secrets.password,
+        };
+        const errors = {
+          authenticated: await caught(client.get("container")),
+          login: await caught(client.login(login)),
+          lookup: await caught(client.lookupConfig("test-event-1")),
+        };
+        for (const [context, error] of Object.entries(errors)) {
+          expect(error, `${label}, ${context}`).toBeInstanceOf(GripError);
+          expect((error as GripError).status, `${label}, ${context}`).toBe(401);
+          expect((error as GripError).bodyExcerpt, `${label}, ${context}`).toBe(body);
+        }
+      }
+    });
+  });
+
   it("records the failure only against the session whose token drew the 401, never against a session signed in while that request was in flight", async () => {
     await withSession(async (home, secrets) => {
       const clock = fakeClock("2026-10-13T08:12:00Z");
