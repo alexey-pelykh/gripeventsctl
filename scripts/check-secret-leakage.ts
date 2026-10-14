@@ -31,7 +31,7 @@ import { execSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { SECRET_PATTERN_SOURCES } from "../packages/core/src/lib/redact.js";
+import { SECRET_PATTERN_SOURCES, redactString } from "../packages/core/src/lib/redact.js";
 
 const EXCLUDED_PATH_PREFIXES = [
   ".tmp/",
@@ -110,9 +110,10 @@ function scanFile(filePath: string): Finding[] {
     while ((match = pattern.exec(content)) !== null) {
       // Every pattern matches at least one character; the guard keeps an empty match from looping forever.
       if (match[0].length === 0) pattern.lastIndex += 1;
-      // Report the shape, never the value: the value is what must not reach a log. A match may span lines, so the
-      // printed prefix collapses whitespace runs to one space and stays at most 12 characters.
-      const prefix = match[0].slice(0, 12).replace(/\s+/g, " ");
+      // Report the shape, never the value: the value is what must not reach a log. The prefix is taken from the match
+      // redacted, so it holds the key or the scheme word and `<REDACTED>`, never a character of the value. A match may
+      // span lines, so the prefix collapses whitespace runs to one space and stays at most 12 characters.
+      const prefix = redactString(match[0]).replace(/\s+/g, " ").slice(0, 12);
       findings.push({ line: lineOf(content, match.index), match: `${prefix}… (${String(match[0].length)} chars)` });
     }
   }
