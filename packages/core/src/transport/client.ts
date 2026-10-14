@@ -22,8 +22,9 @@
  *   exactly one error class of `errors.ts`.
  * - Diagnostic lines on the injected `stderr`: one per answer with the method, the path template
  *   (every numeric segment as `<id>`, no query value) and the status, plus one per 429 wait naming
- *   the wait and the retry; never a header value or a body; every line through `redactString`. An
- *   error message names the path as the caller passed it.
+ *   the wait and the retry; never a header value or a body; every line through `redactString`, then with
+ *   every line-breaking character escaped, so it stays one line. An error message names the path as the caller
+ *   passed it.
  *
  * The client uses the platform's plain HTTPS stack and sets no TLS option. It never signs in on
  * its own: `login()` runs only when the sign-in command calls it with the user's credentials.
@@ -121,16 +122,12 @@ function holdsControlCharacter(text: string): boolean {
 }
 
 /**
- * `text` quoted for a message: JSON string syntax, with every character `isLineBreakingCode` names escaped as
- * `\uXXXX`. `JSON.stringify` escapes the C0 range only and leaves DEL, the C1 range and the two separators raw.
+ * `text` quoted for a message: passed through `redactString` while its whitespace is still whitespace to the patterns,
+ * then in JSON string syntax with every character `isLineBreakingCode` names escaped as `\uXXXX`. `JSON.stringify`
+ * escapes the C0 range only and leaves DEL, the C1 range and the two separators raw.
  */
 function quoted(text: string): string {
-  return escapeLineBreaks(JSON.stringify(text));
-}
-
-/** `path` quoted for a message, then passed through `redactString`. */
-function quotedPath(path: string): string {
-  return redactString(quoted(path));
+  return escapeLineBreaks(JSON.stringify(redactString(text)));
 }
 
 export interface GripClientOptions {
@@ -348,7 +345,8 @@ function registerConfigSecrets(data: unknown): void {
  * What a failed fetch says: its own message, then the first cause's `code` and message where there is
  * one. undici wraps every transport failure as `TypeError("fetch failed", { cause })` (undici 8.11.2,
  * `lib/web/fetch/index.js`), so the discriminating detail (`ENOTFOUND`, `ECONNRESET`, a certificate
- * error) lives only in the cause. The caller passes the line through `redactString`.
+ * error) lives only in the cause. The caller redacts it, then escapes its line-breaking characters: a cause's
+ * message can quote what the server sent, such as the names its certificate carries.
  */
 function failureDetail(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
@@ -525,11 +523,11 @@ export class GripClient {
   #url(path: string, query?: Query): URL {
     const escapes = path.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.split(/[/?#]/).includes("..");
     const url = escapes ? undefined : new URL(path, BASE_URL);
-    // Each refusal quotes the path with every line-breaking character escaped, then through redactString like every
+    // Each refusal quotes the path through redactString, then with every line-breaking character escaped, like every
     // other line the client builds: a caller may have put a token in it.
     if (url === undefined || !url.href.startsWith(BASE_URL)) {
       throw new TypeError(
-        `GripClient: a path is relative to ${BASE_URL} and must not start with "/" or leave it: ${quotedPath(path)}`,
+        `GripClient: a path is relative to ${BASE_URL} and must not start with "/" or leave it: ${quoted(path)}`,
       );
     }
     // A "%" in the path part is refused too: a server may decode `%36` to `6`, while the per-path rules (the profile
@@ -543,7 +541,7 @@ export class GripClient {
       url.pathname !== `${BASE_PATH}${pathPart}`
     ) {
       throw new TypeError(
-        `GripClient: a path is sent as given, so it must be in the form the URL parser sends (no "." segment, backslash, space, fragment, percent-encoding or control character): ${quotedPath(path)}`,
+        `GripClient: a path is sent as given, so it must be in the form the URL parser sends (no "." segment, backslash, space, fragment, percent-encoding or control character): ${quoted(path)}`,
       );
     }
     if (query !== undefined) {
@@ -564,13 +562,15 @@ export class GripClient {
     if (schema === undefined) return data as T;
     const result = schema.safeParse(data);
     if (result.success) return result.data;
-    // An issue's path may hold a key of the answer: the line names it with its line-breaking characters escaped.
-    const reason = escapeLineBreaks(schemaFailureMessage(result.error));
+    // An issue's path may hold a key of the answer: the line names it redacted, then with its line-breaking characters
+    // escaped.
+    const reason = escapeLineBreaks(redactString(schemaFailureMessage(result.error)));
     throw new ApiError(`${subjectOf(spec)}: ${reason}`, reason, { status });
   }
 
+  /** One diagnostic line, whatever the text: redacted, then with every line-breaking character escaped. */
   #log(line: string): void {
-    this.#stderr.write(`${redactString(line)}\n`);
+    this.#stderr.write(`${escapeLineBreaks(redactString(line))}\n`);
   }
 
   /**
@@ -742,14 +742,16 @@ export class GripClient {
    */
   #networkError(spec: RequestSpec, error: unknown, signal: AbortSignal, status?: number): NetworkError {
     const seconds = String(REQUEST_TIMEOUT_MS / 1000);
+    // The failure's own text, redacted, then with every line-breaking character escaped.
+    const detail = (): string => escapeLineBreaks(redactString(failureDetail(error)));
     let what: string;
     if (status === undefined) {
-      what = signal.aborted ? `no answer within ${seconds} s` : `the request failed: ${failureDetail(error)}`;
+      what = signal.aborted ? `no answer within ${seconds} s` : `the request failed: ${detail()}`;
     } else {
       const answered = `HTTP ${String(status)} arrived, but its body`;
       what = signal.aborted
         ? `${answered} did not arrive whole within ${seconds} s of the request`
-        : `${answered} could not be read: ${failureDetail(error)}`;
+        : `${answered} could not be read: ${detail()}`;
     }
     this.#log(`${describe(spec)}: ${what}`);
     return new NetworkError(`${subjectOf(spec)}: ${what}`, {

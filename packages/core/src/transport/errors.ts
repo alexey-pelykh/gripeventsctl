@@ -59,7 +59,8 @@ export function isLineBreakingCode(code: number): boolean {
 /**
  * `text` with every character `isLineBreakingCode` names written as `\uXXXX`: what a message or a hint holds of a text
  * the code does not control (an answer's reason or body, a slug the caller passed), so the text stays on one line
- * wherever the message is printed.
+ * wherever the message is printed. Every caller passes a text already redacted: escaped first, a line break after a
+ * scheme word is no longer whitespace to the pattern that reads it, and the token after it would stay.
  */
 export function escapeLineBreaks(text: string): string {
   let escaped = "";
@@ -147,11 +148,12 @@ export class ConfigError extends GripError {
 
 /**
  * The sign-in command a hint names: `gripeventsctl auth signin <slug>` with the slug where one is known (the stored
- * session's slug after a 401 on an authenticated call, the slug a login signs in to), its line-breaking characters
- * escaped, and the literal `<slug>` only where none is (issue #5 § The envelope and the classification, the 401 rows).
+ * session's slug after a 401 on an authenticated call, the slug a login signs in to), redacted and then with its
+ * line-breaking characters escaped, and the literal `<slug>` only where none is (issue #5 § The envelope and the
+ * classification, the 401 rows).
  */
 export function signInHint(slug?: string): string {
-  return `gripeventsctl auth signin ${slug === undefined ? "<slug>" : escapeLineBreaks(slug)}`;
+  return `gripeventsctl auth signin ${slug === undefined ? "<slug>" : escapeLineBreaks(redactString(slug))}`;
 }
 
 /** The sign-in hint where no slug is known: what `NoSessionError` names. */
