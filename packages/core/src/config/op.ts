@@ -7,8 +7,10 @@
  * array and no shell. A reference is accepted only in the two documented forms, with each segment
  * made of letters, digits, space, `-`, `_` and `.`, and is rejected before any process is spawned.
  * `op` stdout is registered as a secret before any other use; `op` stderr passes through
- * `redactString` before it is shown. The auth item reuses the `op item get` and `op item edit`
- * argument builders; this module makes no such call.
+ * `redactString` before it is shown. Every `op` call is bounded by `OP_TIMEOUT_MS`: the transport
+ * client resolves the session token inside its one process-wide queue slot, so an `op` that hangs on
+ * a prompt would otherwise hold every request of the process. The auth item reuses the `op item get`
+ * and `op item edit` argument builders; this module makes no such call.
  */
 
 import {
@@ -166,6 +168,9 @@ export interface OpReadOptions {
 
 export const OP_NOT_FOUND_MESSAGE = "1Password CLI (`op`) not found on PATH";
 
+/** The most an `op` call may take; a child still running after it is killed and reported as the `config` kind. */
+export const OP_TIMEOUT_MS = 120_000;
+
 /**
  * `op`'s stderr, with every secret shape, every registered value and every bare UUID replaced:
  * a diagnostic from a secrets manager may echo the very value it failed to read, and a session
@@ -184,7 +189,8 @@ function stripTrailingNewline(text: string): string {
 /**
  * Resolve a field reference through `op read`, with the `OP_*` variables of `env` passed through.
  * The value is registered as a secret before it is returned and is never written anywhere. A
- * missing `op` binary and a non-zero exit are the `config` kind; there is no fallback.
+ * missing `op` binary, a non-zero exit and a child still running after `OP_TIMEOUT_MS` are the
+ * `config` kind; there is no fallback.
  */
 export async function opRead(
   reference: string,
@@ -197,7 +203,7 @@ export async function opRead(
     const child = run(
       "op",
       args,
-      { env: opEnvironment(env), encoding: "utf8", maxBuffer: 1024 * 1024, windowsHide: true },
+      { env: opEnvironment(env), encoding: "utf8", maxBuffer: 1024 * 1024, windowsHide: true, timeout: OP_TIMEOUT_MS },
       (error, stdout, stderr) => {
         resolve({ error, stdout, stderr });
       },
@@ -214,6 +220,13 @@ export async function opRead(
       throw new ConfigError(
         OP_NOT_FOUND_MESSAGE,
         "install the 1Password CLI, or store the session token itself in the config file",
+      );
+    }
+    // `execFile` kills the child itself when the timeout fires (`killed` true, the signal it sent, no exit code).
+    if (result.error.killed) {
+      throw new ConfigError(
+        `1Password CLI (\`op\`) did not answer within ${String(OP_TIMEOUT_MS / 1000)} s while reading ${reference}`,
+        "check that the 1Password CLI is signed in (`op signin`) and waits on no prompt, or store the session token itself in the config file",
       );
     }
     const exit = typeof result.error.code === "number" ? ` (exit ${String(result.error.code)})` : "";
