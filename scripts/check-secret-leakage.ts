@@ -21,14 +21,18 @@
  *   - Tracked files only (`git ls-files`); untracked and git-ignored files are not the concern.
  *   - Excludes `.tmp/` (where captured tokens may legitimately sit), binary files, lockfiles,
  *     this script, the source-of-truth module and the test that exercises it.
+ *   - Every other tracked file is read whole, whatever its size. A file that cannot be read (deleted
+ *     from the working tree, a directory, too large for one string) is named with the reason, and
+ *     fails the check: the check cannot vouch for a file it did not read.
  *
  * Exit codes:
- *   0: no match in tracked source (clean)
- *   1: one or more matches found; each is reported with file and line
+ *   0: no match in tracked source (clean), and every tracked file in scope was read
+ *   1: one or more matches found, each reported with file and line; or one or more tracked files
+ *      could not be read, each reported with the reason
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { SECRET_PATTERN_SOURCES, SECRET_SHAPES, redactString } from "../packages/core/src/lib/redact.js";
@@ -106,14 +110,15 @@ interface Finding {
   shape: Shape;
 }
 
-function scanFile(filePath: string): Finding[] {
+/** What scanning one file gives: its findings, or why it could not be read. */
+type ScanResult = { findings: Finding[] } | { unreadable: string };
+
+function scanFile(filePath: string): ScanResult {
   let content: string;
   try {
-    const stat = statSync(filePath);
-    if (stat.size > 1024 * 1024) return [];
     content = readFileSync(filePath, "utf8");
-  } catch {
-    return [];
+  } catch (error: unknown) {
+    return { unreadable: error instanceof Error ? error.message : String(error) };
   }
 
   const findings: Finding[] = [];
@@ -134,7 +139,7 @@ function scanFile(filePath: string): Finding[] {
       });
     }
   }
-  return findings.sort((a, b) => a.line - b.line);
+  return { findings: findings.sort((a, b) => a.line - b.line) };
 }
 
 /**
@@ -175,20 +180,32 @@ function main(): void {
   const tracked = listTrackedFiles(repoRoot);
 
   const allFindings: Finding[] = [];
+  let unreadable = 0;
   for (const relativePath of tracked) {
     if (shouldSkipPath(relativePath)) continue;
     const absPath = join(repoRoot, relativePath);
-    const findings = scanFile(absPath);
-    for (const f of findings) {
-      process.stderr.write(`${relativePath}:${String(f.line)}: secret-shaped value [${f.shape.name}]: ${f.match}\n`);
+    const result = scanFile(absPath);
+    // Every line names the file through redactString too: a path is text a token can sit in.
+    const shown = redactString(relativePath);
+    if ("unreadable" in result) {
+      process.stderr.write(`${shown}: not scanned: ${redactString(result.unreadable)}\n`);
+      unreadable += 1;
+      continue;
+    }
+    for (const f of result.findings) {
+      process.stderr.write(`${shown}:${String(f.line)}: secret-shaped value [${f.shape.name}]: ${f.match}\n`);
       allFindings.push(f);
     }
   }
 
-  if (allFindings.length > 0) {
-    process.stderr.write(failMessage(allFindings));
-    process.exit(1);
+  if (allFindings.length > 0) process.stderr.write(failMessage(allFindings));
+  if (unreadable > 0) {
+    process.stderr.write(
+      `\nFAIL: ${String(unreadable)} tracked file(s) could not be read, so the check cannot vouch for them.\n` +
+        `Restore each file, or stage its removal (git rm), then run the check again.\n`,
+    );
   }
+  if (allFindings.length > 0 || unreadable > 0) process.exit(1);
 }
 
 main();
