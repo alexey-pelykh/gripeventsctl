@@ -981,11 +981,13 @@ function refuseGatedType(parsed: ParsedAnswer): void {
     // it as the id the answer names, without calling it a type id (issue #5 § The envelope and the classification).
     if (spec.context === "authenticated" && isDirectorySearchPath(spec.path) && isGatedTypeReason(data)) {
       const named = gatedThingId(data);
+      // Redacted and cut once: the message quotes the excerpt, and `bodyExcerpt` is the same excerpt.
+      const excerpt = bodyExcerpt(data);
       throw new GatedTypeError(
-        `${subject}: ${http} ${JSON.stringify(bodyExcerpt(data))}: the type set includes a type this session cannot list`,
+        `${subject}: ${http} ${JSON.stringify(excerpt)}: the type set includes a type this session cannot list`,
         {
           status,
-          bodyExcerpt: data,
+          bodyExcerpt: excerpt,
           ...(named === undefined ? {} : { namedId: named }),
         },
       );
@@ -1034,10 +1036,14 @@ function refuseConflict(parsed: ParsedAnswer): void {
     if (details !== undefined) {
       // An array whose entries hold no text gives no reason (issue #5, the 409 row): the message ends at the status
       // and the error's hint is the status, while `bodyExcerpt` keeps the joined array. Any entry with text keeps the
-      // joined array in the message.
-      const text = conflictText(details);
-      const tail = text === undefined ? "" : `: ${bodyExcerpt(text)}`;
-      throw new ConflictError(`${subject}: ${http}${tail}`, details, { status, bodyExcerpt: details.join("; ") });
+      // joined array in the message and the hint. The joined array is redacted and cut once, and all three reuse it.
+      const excerpt = bodyExcerpt(details.join("; "));
+      const hasText = conflictText(details) !== undefined;
+      throw new ConflictError(`${subject}: ${http}${hasText ? `: ${excerpt}` : ""}`, details, {
+        status,
+        bodyExcerpt: excerpt,
+        hint: hasText ? excerpt : http,
+      });
     }
   }
 }
@@ -1079,15 +1085,15 @@ function unclassifiedError(parsed: ParsedAnswer): ApiError {
 }
 
 /**
- * The `api` error of a `success: false` answer, the table's row "any other `success: false`": the reason's excerpt
- * is the message tail and the hint, and the reason is `bodyExcerpt`. Where the answer gives no reason (`data` absent,
- * empty or only whitespace), the hint is the status, the message ends at the status, and `bodyExcerpt` carries the
- * body text, as it does for an unexpected answer.
+ * The `api` error of a `success: false` answer, the table's row "any other `success: false`": the reason's excerpt,
+ * redacted and cut once, is the message tail, the hint and `bodyExcerpt`. Where the answer gives no reason (`data`
+ * absent, empty or only whitespace), the hint is the status, the message ends at the status, and `bodyExcerpt`
+ * carries the body text, as it does for an unexpected answer.
  */
-function reasonError(line: string, http: string, status: number, reason: string, text: string): ApiError {
-  if (reason === "") return new ApiError(`${line}: ${http}`, http, { status, bodyExcerpt: text });
-  const detail = bodyExcerpt(reason);
-  return new ApiError(`${line}: ${http}: ${detail}`, detail, { status, bodyExcerpt: reason });
+function reasonError(subject: string, http: string, status: number, reason: string, text: string): ApiError {
+  if (reason === "") return new ApiError(`${subject}: ${http}`, http, { status, bodyExcerpt: text });
+  const excerpt = bodyExcerpt(reason);
+  return new ApiError(`${subject}: ${http}: ${excerpt}`, excerpt, { status, bodyExcerpt: excerpt });
 }
 
 /** The `api` error of an answer no other row matched: the status as the hint, the body only as the excerpt. */

@@ -295,23 +295,27 @@ export function conflictText(details: readonly string[]): string | undefined {
   return details.some((detail) => detail.trim() !== "") ? details.join("; ") : undefined;
 }
 
+/** The hint of a 409 whose caller names none: the array's text as an excerpt, or the status where it holds no text. */
+function conflictHint(details: readonly string[], status: number): string {
+  const text = conflictText(details);
+  return text === undefined ? `HTTP ${String(status)}` : bodyExcerpt(text);
+}
+
 /**
  * HTTP 409 with a body holding an array, under `error.data` or as the envelope's own `data`; the array is the hint,
  * as the app shows it, cut to the excerpt length like every hint built from a body, or `HTTP 409` where the array
- * holds no text, while `details` keeps every item whole for the write items to read. The status is 409 unless the
- * caller names another. Exit code 1.
+ * holds no text, unless the caller names the hint (the transport client passes the excerpt it already cut), while
+ * `details` keeps every item whole for the write items to read. The status is 409 unless the caller names another.
+ * Exit code 1.
  */
 export class ConflictError extends GripError {
   declare readonly kind: "conflict";
   readonly details: readonly string[];
 
-  constructor(message: string, details: readonly string[], options: GripErrorOptions = {}) {
-    const status = options.status ?? 409;
-    const text = conflictText(details);
-    super("conflict", message, text === undefined ? `HTTP ${String(status)}` : bodyExcerpt(text), {
-      ...options,
-      status,
-    });
+  constructor(message: string, details: readonly string[], options: GripErrorOptions & { hint?: string } = {}) {
+    const { hint, ...rest } = options;
+    const status = rest.status ?? 409;
+    super("conflict", message, hint ?? conflictHint(details, status), { ...rest, status });
     this.details = details.map((detail) => redactString(detail));
   }
 }
