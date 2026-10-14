@@ -71,11 +71,12 @@ export function dataText(data: unknown): string {
 }
 
 /**
- * `data` as the reason of a `success: false` answer: `dataText(data)`, or the empty string where that text is empty
- * or only whitespace, which counts as no reason (issue #5 § The envelope and the classification): the message then
- * ends at the status and the hint is the status.
+ * `data` as the reason of a `success: false` answer: `dataText(data)`, or the empty string where `data` is `null` or
+ * its text is empty or only whitespace, which counts as no reason (issue #5 § The envelope and the classification):
+ * the message then ends at the status and the hint is the status.
  */
 export function reasonText(data: unknown): string {
+  if (data === null) return "";
   const text = dataText(data);
   return text.trim() === "" ? "" : text;
 }

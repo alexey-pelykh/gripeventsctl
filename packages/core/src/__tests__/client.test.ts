@@ -1168,6 +1168,12 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
     },
     { answer: "a 200 with success: false and no data key", path: "container", status: 200, body: { success: false } },
     {
+      answer: "a 400 whose data is null, which carries no reason",
+      path: "container",
+      status: 400,
+      body: { success: false, data: null },
+    },
+    {
       answer: "a 400 whose data is only whitespace, which counts as no reason",
       path: "container",
       status: 400,
