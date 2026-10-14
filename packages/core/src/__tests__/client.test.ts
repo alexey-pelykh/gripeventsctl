@@ -1471,16 +1471,14 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
     });
   });
 
-  it("the two documented reasons decide the kind on every status but 401, 429 and a 3xx, a JSON 403 included, each from one request", async () => {
+  it("the two documented reasons decide the kind on every status but 401 and a 3xx, a JSON 403 and a 429 included, each from one request", async () => {
     // The pages record the body text only, never a status ("none seen live"), so the reason decides the kind on
-    // every status the classifier reads a reason on, and a cap answered with 403 reaches the write items as
-    // swipe-cap, not as api. It does not decide it on a 401 (auth-failed, the case below), on a 429 (the backoff
-    // schedule, then throttled) or on a 3xx (api, decided before any body is read for a reason). A 429 that
-    // carries either reason is backed off and raised throttled; whether the reason should win is open with the
-    // spec owner.
+    // every status the classifier reads a reason on: a cap answered with 403 reaches the write items as swipe-cap,
+    // not as api, and a cap answered with 429 is raised at once, with no wait and no retry (issue #5, the 429 row).
+    // It does not decide it on a 401 (auth-failed, the case below) or on a 3xx (api, decided on the status alone).
     await withSession(async (home) => {
       const client = newClient(home.env);
-      const statuses = [200, 201, 400, 403, 404, 409, 422, 500];
+      const statuses = [200, 201, 400, 403, 404, 409, 422, 429, 500];
       const reasons: [string, (statusCode: number) => GripReply, typeof SwipeCapError | typeof ModePhaseError][] = [
         ["swipe-cap", swipeCapAnswer, SwipeCapError],
         ["mode-phase", modePhaseAnswer, ModePhaseError],
@@ -1502,6 +1500,37 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
         }
       }
       expect((await loadConfig({ env: home.env })).config.session?.auth_failed_at).toBeUndefined();
+    });
+  });
+
+  it("a 429 whose data is the swipe-cap or the mode-phase reason raises that kind at once: one request, no wait, no retry", async () => {
+    // The reason outranks the 429 (issue #5, the 429 row): the write items stop on swipe-cap, and a wait would only
+    // retry a request the platform has refused for the day.
+    await withSession(async (home) => {
+      const reasons = [
+        ["swipe-cap", swipeCapAnswer, SwipeCapError],
+        ["mode-phase", modePhaseAnswer, ModePhaseError],
+      ] as const;
+      for (const [kind, answer, errorClass] of reasons) {
+        const clock = recordingClock();
+        const stderr = stderrSink();
+        pool()
+          .intercept({ path, method: "POST" })
+          .reply(() => answer(429));
+        const pending = caught(newClient(home.env, { clock, stderr: stderr.stream }).post(relative, { message: "" }));
+        try {
+          // Settled at once, or the client is waiting on the schedule: the race names which.
+          const error = await Promise.race([pending, settle().then(() => "still waiting on the clock")]);
+          expect(error, kind).toBeInstanceOf(errorClass);
+          expect((error as GripError).kind, kind).toBe(kind);
+          expect((error as GripError).status, kind).toBe(429);
+          expect(clock.sleeps, kind).toEqual([]);
+          expect(stderr.text(), kind).toBe(`POST ${WRITE_TEMPLATE}: 429\n`);
+        } finally {
+          await drain(clock, pending);
+        }
+      }
+      expect(calls()).toHaveLength(2);
     });
   });
 

@@ -575,7 +575,10 @@ export class GripClient {
     lastProfileReadAt.set(this.#clock, this.#clock.now().getTime());
   }
 
-  /** Send, wait out 429 on the schedule with the same request, and classify the final answer. */
+  /**
+   * Send, decide every 429 (the two reasons at once, else the backoff schedule with the same request, then
+   * `throttled`), and classify every other answer.
+   */
   async #exchange(spec: RequestSpec, headers: HeaderSet): Promise<Classified> {
     const line = describe(spec);
     const subject = subjectOf(spec);
@@ -586,13 +589,22 @@ export class GripClient {
         this.#log(`${line}: ${String(answer.status)}`);
         return this.#classify(spec, answer);
       }
+      // The 429 row (issue #5 § The envelope and the classification): the body, parsed once, decides first. A `data`
+      // that is the swipe-cap or the mode-phase reason raises that kind at once, with no wait and no retry. A body
+      // over the cap is not read, and the 429 runs the backoff on its status alone.
+      const parsed = answer.text === undefined ? undefined : parseAnswer(spec, subject, "HTTP 429", 429, answer.text);
+      const matched = parsed === undefined ? undefined : matchedReasonError(parsed);
+      if (matched !== undefined) {
+        this.#log(`${line}: 429`);
+        throw matched;
+      }
       // A `Retry-After` in HTTP-date form is measured on the client's clock.
       const waitS = backoffWaitS(retries + 1, answer.headers.get("retry-after"), this.#clock.now());
       if (waitS === undefined) {
         this.#log(`${line}: 429; the backoff schedule has ended after ${String(MAX_RETRIES)} retries`);
         throw new ThrottledError(
           `${subject}: HTTP 429 after ${String(MAX_RETRIES)} retries; the platform is throttling`,
-          { status: 429, bodyExcerpt: throttledExcerpt(answer.text) },
+          { status: 429, bodyExcerpt: throttledExcerpt(parsed) },
         );
       }
       this.#log(
@@ -676,14 +688,14 @@ export class GripClient {
   }
 
   /**
-   * The classification table; raises exactly one error class or returns `data`. A 429 never reaches it:
-   * `#exchange` runs the backoff schedule on every 429, then raises `throttled`, whatever reason the body
-   * carries. In order: a body over the cap and a 3xx are `api`, decided before any body is read for a
-   * reason; a 403 whose body is not JSON is `load-balancer-rejected`; a JSON 403 on a directory search
-   * with `not authorized` is `gated-type`; a 401 is `auth-failed` whatever its body; the two reasons the
-   * app matches on are `swipe-cap` and `mode-phase` on every status but 401, 429 and a 3xx, a JSON 403
-   * included; any other JSON 403 is `api`; a 409 with an `error.data` array is `conflict`; the documented
-   * 404 on the lookup is `unknown-slug`; a 2xx `success: true` returns `data`; the rest is `api`.
+   * The classification table (issue #5 § The envelope and the classification); raises exactly one error class or
+   * returns `data`. A 429 never reaches it: `#exchange` decides every 429, the two reasons the app matches on at
+   * once, else the backoff schedule and then `throttled`. In order: a body over the cap and a 3xx are `api`,
+   * decided before any body is read for a reason; a 403 whose body is not JSON is `load-balancer-rejected`; a JSON
+   * 403 on a directory search with `not authorized` is `gated-type`; a 401 is `auth-failed` whatever its body; the
+   * two reasons the app matches on are `swipe-cap` and `mode-phase` on every other status, a JSON 403 included; any
+   * other JSON 403 is `api`; a 409 with an array under `error.data` or in `data` is `conflict`; the documented 404
+   * on the lookup is `unknown-slug`; a 2xx `success: true` returns `data`; the rest is `api`.
    *
    * This method is that order: it calls one helper per row, in the order above, and each helper throws its kind
    * where its row applies and returns where it does not.
@@ -856,21 +868,24 @@ function refuseGatedType(parsed: ParsedAnswer): void {
   }
 }
 
+/**
+ * The error of the two reasons the app matches on, `swipe-cap` and `mode-phase`, or `undefined` where the answer
+ * gives neither. The reason decides the kind on every status but 401 (its row runs first) and a 3xx (`api`, decided
+ * on the status alone), a JSON 403 and a 429 included: the pages record the body text only ("none seen live"), the
+ * write items stop on `swipe-cap`, and a 429 that carries either reason is raised at once by `#exchange`, with no
+ * wait and no retry (issue #5 § The envelope and the classification, the 429 row).
+ */
+function matchedReasonError(parsed: ParsedAnswer): SwipeCapError | ModePhaseError | undefined {
+  const { status, subject, reason } = parsed;
+  if (reason === SWIPE_CAP_REASON) return new SwipeCapError(`${subject}: ${reason}`, { status, bodyExcerpt: reason });
+  if (reason === MODE_PHASE_REASON) return new ModePhaseError(`${subject}: ${reason}`, { status, bodyExcerpt: reason });
+  return undefined;
+}
+
 /** The two reasons the app matches on: `swipe-cap` and `mode-phase`. */
 function refuseMatchedReason(parsed: ParsedAnswer): void {
-  const { status, subject, reason } = parsed;
-  // The two reasons the app matches on decide the kind on every status but 401 (its row runs first), 429
-  // and a 3xx, a JSON 403 included: the pages record the body text only ("none seen live"), and the write
-  // items stop on `swipe-cap`. A 3xx is `api`, decided before any body is read for a reason, and a 429
-  // never reaches `#classify`: `#exchange` runs the backoff schedule on it, then raises `throttled`. So a
-  // 429 that carries either reason is backed off and raised `throttled`, and whether the reason should
-  // win is open with the spec owner.
-  if (reason === SWIPE_CAP_REASON) {
-    throw new SwipeCapError(`${subject}: ${reason}`, { status, bodyExcerpt: reason });
-  }
-  if (reason === MODE_PHASE_REASON) {
-    throw new ModePhaseError(`${subject}: ${reason}`, { status, bodyExcerpt: reason });
-  }
+  const matched = matchedReasonError(parsed);
+  if (matched !== undefined) throw matched;
 }
 
 /** Any other JSON 403 is `api`. */
@@ -985,12 +1000,12 @@ function subjectOf(spec: RequestSpec): string {
 /**
  * What a final 429 carries as `bodyExcerpt`: its envelope's `data` where the answer is a `{ success, data }` envelope
  * with a string `data` (the documented throttling reason), the body text where it is not, and nothing for a body over
- * the cap.
+ * the cap (`parsed` is then `undefined`).
  */
-function throttledExcerpt(text: string | undefined): string {
-  if (text === undefined) return "";
-  const data = envelopeOf(parseJson(text))?.data;
-  return typeof data === "string" ? data : text;
+function throttledExcerpt(parsed: ParsedAnswer | undefined): string {
+  if (parsed === undefined) return "";
+  const data = parsed.envelope?.data;
+  return typeof data === "string" ? data : parsed.text;
 }
 
 /**
