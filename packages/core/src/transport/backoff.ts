@@ -14,8 +14,12 @@
 /** A `Retry-After` header is honoured up to this many seconds. */
 export const RETRY_AFTER_CAP_S = 300;
 
-/** The waits, in seconds, before retry 1, 2 and 3 when the answer carries no `Retry-After`. */
-export const SCHEDULE_S: readonly number[] = [60, 120, 240];
+/**
+ * The waits, in seconds, before retry 1, 2 and 3 when the answer carries no `Retry-After`. Frozen, because
+ * `readonly` binds at compile time only and the package entry hands this array to every importer: no importer can
+ * change the 429 waits at run time.
+ */
+export const SCHEDULE_S: readonly number[] = Object.freeze([60, 120, 240]);
 
 /** The number of retries after the first 429: the length of the schedule. */
 export const MAX_RETRIES = SCHEDULE_S.length;
@@ -23,8 +27,10 @@ export const MAX_RETRIES = SCHEDULE_S.length;
 /**
  * The seconds a `Retry-After` header asks for, in either form RFC 9110 § 10.2.3 allows: delta-seconds
  * (a positive integer), or an HTTP-date read as the whole seconds from `now` until the date, rounded
- * up so the retry never leaves before it. Zero, a negative value, a date at or before `now` and
- * anything unparseable yield `undefined`, and the schedule step applies. A date is any string holding a
+ * up so the retry never leaves before it. A delta-seconds value too long for an exact number reads as
+ * `Number.MAX_SAFE_INTEGER`, so the cap applies to it like to any other value above the cap. Zero, a
+ * negative value, a date at or before `now` and anything unparseable yield `undefined`, and the
+ * schedule step applies. A date is any string holding a
  * letter that `Date.parse` understands: the IMF-fixdate (`Wed, 21 Oct 2026 07:28:00 GMT`), the obsolete
  * RFC 850 form, and the asctime form, which names no zone and is read in the local one. The letter is
  * required because `Date.parse` reads a bare numeral (`1.5`, `-5`) as a year or a day.
@@ -34,7 +40,8 @@ export function parseRetryAfter(value: string | null | undefined, now: Date = ne
   const trimmed = value.trim();
   if (/^\d+$/.test(trimmed)) {
     const seconds = Number(trimmed);
-    return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : undefined;
+    if (seconds === 0) return undefined;
+    return Number.isSafeInteger(seconds) ? seconds : Number.MAX_SAFE_INTEGER;
   }
   if (!/[A-Za-z]/.test(trimmed)) return undefined;
   const date = Date.parse(trimmed);

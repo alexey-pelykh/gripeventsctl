@@ -23,12 +23,18 @@ export function searchPage200(page: number, options: SearchPageOptions = {}): Gr
   return success200(Array.from({ length: pageSize }, (_unused, index) => ({ id: (page - 1) * pageSize + index + 1 })));
 }
 
-/** docs/api/attendees.md § Gated for a normal attendee token (HTTP 403): `thing N not authorized`. The page does not say what N identifies; the parameter name is the fixture's. */
+/**
+ * docs/api/attendees.md § Gated for a normal attendee token (HTTP 403): `thing N not authorized`. The page does not say
+ * what N identifies; the parameter name is the fixture's.
+ */
 export function gatedType403(thingId: number): GripReply {
   return failure(`thing ${String(thingId)} not authorized`, 403);
 }
 
-/** docs/api/attendees.md § The per-person profile: `data.id` equals the requested thing id; the other fields omitted. */
+/**
+ * docs/api/attendees.md § The per-person profile: `data.id` equals the requested thing id. `name` is a fixture field
+ * the section does not record, and every other field of the answer is omitted.
+ */
 export function profile200(thingId: number): GripReply {
   return success200({ id: thingId, name: `Test Person ${String(thingId)}` });
 }
