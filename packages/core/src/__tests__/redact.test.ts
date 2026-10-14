@@ -10,6 +10,7 @@ import {
   REDACTED,
   RUNTIME_ONLY_PATTERN_SOURCES,
   SECRET_PATTERN_SOURCES,
+  SECRET_SHAPES,
   redactString,
   registerSecret,
 } from "../lib/redact.js";
@@ -193,6 +194,18 @@ describe("the pattern lists cannot change at run time", () => {
       writable.length = 0;
     }).toThrow(TypeError);
     expect([...list]).toEqual(before);
+  });
+
+  it("freezes SECRET_SHAPES and each shape, and names every source of SECRET_PATTERN_SOURCES with a remedy", () => {
+    // The leakage lint names each finding and gives its remedy from this list.
+    expect(Object.isFrozen(SECRET_SHAPES)).toBe(true);
+    expect(SECRET_SHAPES.map((shape) => shape.source)).toEqual([...SECRET_PATTERN_SOURCES]);
+    for (const shape of SECRET_SHAPES) {
+      expect(Object.isFrozen(shape), shape.name).toBe(true);
+      expect(shape.name, shape.source).not.toBe("");
+      expect(shape.name, shape.source).not.toMatch(/[[\]]/);
+      expect(shape.remedy, shape.name).not.toBe("");
+    }
   });
 });
 

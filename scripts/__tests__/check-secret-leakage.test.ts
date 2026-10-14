@@ -170,7 +170,7 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     const result = runCheck();
 
     expect(result.status).toBe(1);
-    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value:"));
+    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value ["));
     const flaggedFiles = new Set(findings.map((line) => line.split(":")[0]));
     expect([...flaggedFiles].sort()).toEqual(
       Object.keys(files)
@@ -189,10 +189,10 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     const result = runCheck();
 
     expect(result.status).toBe(1);
-    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value:"));
+    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value ["));
     expect(findings.length).toBeGreaterThanOrEqual(7);
     for (const line of findings) {
-      const match = /secret-shaped value: (.*)… \((\d+) chars\)$/u.exec(line);
+      const match = /secret-shaped value \[[^\]]+\]: (.*)… \((\d+) chars\)$/u.exec(line);
       expect(match, line).not.toBeNull();
       if (match === null) continue;
       const prefix = match[1] ?? "";
@@ -249,10 +249,43 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     const result = runCheck();
 
     expect(result.status).toBe(1);
-    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value:"));
+    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value ["));
     expect(findings).toHaveLength(1);
-    expect(findings[0]).toMatch(/^fixtures\/config-answer\.json:3: secret-shaped value: /);
+    expect(findings[0]).toMatch(/^fixtures\/config-answer\.json:3: secret-shaped value \[[^\]]+\]: /);
     expect(result.stderr).not.toContain(secrets.applicationToken);
+  });
+
+  it("R21: names the shape of each finding, and the FAIL message gives a remedy that fits each shape it found", () => {
+    const secrets = fixtureSecrets();
+    const files = shapedFiles(secrets);
+    for (const name of ["user-token-key.txt", "jwt.txt", "basic-alone.txt", "general-token-json.txt"]) {
+      write(`fixtures/${name}`, files[name] ?? "");
+    }
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    const shapeOf = (file: string): string | undefined =>
+      result.stderr
+        .split("\n")
+        .find((line) => line.startsWith(`fixtures/${file}:`))
+        ?.match(/secret-shaped value \[([^\]]+)\]: /u)?.[1];
+    expect(shapeOf("user-token-key.txt")).toBe("a session token after user_token or X-Authorization");
+    expect(shapeOf("jwt.txt")).toBe("a JWT, such as the chat token");
+    expect(shapeOf("basic-alone.txt")).toBe("a Basic value");
+    expect(shapeOf("general-token-json.txt")).toBe("the application token after general.token or a general key");
+    const footer = result.stderr.slice(result.stderr.indexOf("FAIL: "));
+    expect(footer).toMatch(/^FAIL: found 4 secret-shaped value\(s\) in tracked source/u);
+    // One remedy line per remedy, naming every shape found that it fits; the password for a Basic value.
+    expect(footer).toContain("  - a Basic value: the base64 holds an email and a password: change that password.\n");
+    expect(footer).toContain(
+      "  - a session token after user_token or X-Authorization: sign in again (`gripeventsctl auth signin <slug>`), so the stored session is a new one.\n",
+    );
+    expect(footer).toContain(
+      "  - a JWT, such as the chat token; the application token after general.token or a general key: no command of this tool replaces it: rewrite the commit before it is pushed.\n",
+    );
+    expect(footer).not.toContain("revoke");
   });
 
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {

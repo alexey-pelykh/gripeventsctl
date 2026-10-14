@@ -5,13 +5,13 @@
 /**
  * Secret-leakage guard.
  *
- * Scans every tracked file for the secret shapes GripEventsCtl handles (a Grip session token in
- * its header or JSON-key context, a JWT-shaped chat token, the login `Authorization` value, a
- * `Basic` value, the application token and the `grip_cdp_token` in their key contexts) and fails
- * when one is found. A match in tracked source is almost certainly a leak: a token that landed in
- * a fixture, a snapshot or a captured response during local development. Each file is matched as
- * a whole, not line by line, so a pretty-printed capture whose key context sits on an earlier line
- * than the value is caught too; a finding is reported at the line its match starts on.
+ * Scans every tracked file for the secret shapes GripEventsCtl handles (`SECRET_PATTERN_SOURCES`, each
+ * named in `SECRET_SHAPES`) and fails when one is found. A match in tracked source is almost certainly
+ * a leak: a token that landed in a fixture, a snapshot or a captured response during local
+ * development. Each file is matched as a whole, not line by line, so a pretty-printed capture whose
+ * key context sits on an earlier line than the value is caught too; a finding is reported at the line
+ * its match starts on, with the name of its shape and a prefix of the match redacted, and the FAIL
+ * message gives the remedy `SECRET_SHAPES` names for each shape found.
  *
  * The patterns live ONCE, in `packages/core/src/lib/redact.ts`, and are consumed by both this
  * lint-time check and the runtime redaction path. Extending either side means extending
@@ -31,7 +31,7 @@ import { execSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { SECRET_PATTERN_SOURCES, redactString } from "../packages/core/src/lib/redact.js";
+import { SECRET_PATTERN_SOURCES, SECRET_SHAPES, redactString } from "../packages/core/src/lib/redact.js";
 
 const EXCLUDED_PATH_PREFIXES = [
   ".tmp/",
@@ -87,9 +87,23 @@ function listTrackedFiles(repoRoot: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+/** A pattern the lint applies, with the name and the remedy `SECRET_SHAPES` gives its source. */
+interface Shape {
+  source: string;
+  name: string;
+  remedy: string;
+}
+
+// Every source of SECRET_PATTERN_SOURCES, named from SECRET_SHAPES; a source with no entry there is still matched.
+const SHAPES: Shape[] = SECRET_PATTERN_SOURCES.map((source) => {
+  const shape = SECRET_SHAPES.find((candidate) => candidate.source === source);
+  return { source, name: shape?.name ?? "a secret-shaped value", remedy: shape?.remedy ?? "remove it" };
+});
+
 interface Finding {
   line: number;
   match: string;
+  shape: Shape;
 }
 
 function scanFile(filePath: string): Finding[] {
@@ -102,10 +116,9 @@ function scanFile(filePath: string): Finding[] {
     return [];
   }
 
-  const patterns = SECRET_PATTERN_SOURCES.map((source) => new RegExp(source, "gi"));
   const findings: Finding[] = [];
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
+  for (const shape of SHAPES) {
+    const pattern = new RegExp(shape.source, "gi");
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(content)) !== null) {
       // Every pattern matches at least one character; the guard keeps an empty match from looping forever.
@@ -114,10 +127,34 @@ function scanFile(filePath: string): Finding[] {
       // redacted, so it holds the key or the scheme word and `<REDACTED>`, never a character of the value. A match may
       // span lines, so the prefix collapses whitespace runs to one space and stays at most 12 characters.
       const prefix = redactString(match[0]).replace(/\s+/g, " ").slice(0, 12);
-      findings.push({ line: lineOf(content, match.index), match: `${prefix}… (${String(match[0].length)} chars)` });
+      findings.push({
+        line: lineOf(content, match.index),
+        match: `${prefix}… (${String(match[0].length)} chars)`,
+        shape,
+      });
     }
   }
   return findings.sort((a, b) => a.line - b.line);
+}
+
+/**
+ * The FAIL message: what to do with every finding, then one line per remedy the shapes found need, naming those
+ * shapes in the order the patterns list them.
+ */
+function failMessage(findings: readonly Finding[]): string {
+  const byRemedy = new Map<string, Set<string>>();
+  for (const shape of SHAPES) {
+    if (!findings.some((finding) => finding.shape.source === shape.source)) continue;
+    const names = byRemedy.get(shape.remedy) ?? new Set<string>();
+    names.add(shape.name);
+    byRemedy.set(shape.remedy, names);
+  }
+  const remedies = [...byRemedy].map(([remedy, names]) => `  - ${[...names].join("; ")}: ${remedy}.\n`);
+  return (
+    `\nFAIL: found ${String(findings.length)} secret-shaped value(s) in tracked source; none may appear in committed code.\n` +
+    `Remove each value, or move its file under .tmp/ (git-ignored); a value already committed stays in the history until that commit is rewritten. If a value is real:\n` +
+    remedies.join("")
+  );
 }
 
 /** The 1-based line `offset` falls on: one more than the number of newlines before it. */
@@ -137,23 +174,19 @@ function main(): void {
   const repoRoot = process.cwd();
   const tracked = listTrackedFiles(repoRoot);
 
-  let totalFindings = 0;
+  const allFindings: Finding[] = [];
   for (const relativePath of tracked) {
     if (shouldSkipPath(relativePath)) continue;
     const absPath = join(repoRoot, relativePath);
     const findings = scanFile(absPath);
     for (const f of findings) {
-      process.stderr.write(`${relativePath}:${String(f.line)}: secret-shaped value: ${f.match}\n`);
-      totalFindings += 1;
+      process.stderr.write(`${relativePath}:${String(f.line)}: secret-shaped value [${f.shape.name}]: ${f.match}\n`);
+      allFindings.push(f);
     }
   }
 
-  if (totalFindings > 0) {
-    process.stderr.write(
-      `\nFAIL: found ${String(totalFindings)} secret-shaped value(s) in tracked source.\n` +
-        `These look like Grip session tokens or chat tokens and must NOT appear in committed code.\n` +
-        `Move them under .tmp/ (git-ignored), redact them, or sign out to revoke the session if they are real.\n`,
-    );
+  if (allFindings.length > 0) {
+    process.stderr.write(failMessage(allFindings));
     process.exit(1);
   }
 }
