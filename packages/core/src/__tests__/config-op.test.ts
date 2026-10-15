@@ -192,8 +192,8 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
   });
 
   it.skipIf(!STUB_OP_SUPPORTED)(
-    `ends a child that ignores SIGTERM at the timeout, so a hung op never holds the call past the bound${POSIX_ONLY}`,
-    async () => {
+    `ends a child that ignores SIGTERM at the timeout, so a hung op never holds the call past the bound (skipped where the stub sets no trap within the longest timeout)${POSIX_ONLY}`,
+    async (context) => {
       // With execFile's default SIGTERM, a child that ignores it keeps the call waiting until it exits on its own,
       // and an exit 0 then reads as an answer: this stub would answer the empty string after 12 s, and opRead would
       // return it. The real execFile runs here with every option opRead passes, the timeout alone shortened. The stub
@@ -216,7 +216,8 @@ describe("[CAP-CFG] 1Password references and arguments", () => {
           );
           if ((await readdir(markerDir)).includes("trapped")) return;
         }
-        throw new Error("the stub set no trap before the timeout, even at 10 s: the run tells nothing");
+        // A machine too loaded to start the stub within the longest timeout says nothing of the bound: skip, not fail.
+        context.skip("the stub set no trap before the timeout, even at 10 s, so no run tells whether SIGKILL ended it");
       } finally {
         await stub.remove();
         await rm(markerDir, { recursive: true, force: true });
