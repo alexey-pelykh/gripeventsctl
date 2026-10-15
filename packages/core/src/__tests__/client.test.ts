@@ -1764,6 +1764,24 @@ describe("[CAP-CLIENT] AC-08 a 401 on an authenticated call", () => {
     });
   });
 
+  it("escapes a raw line break the store's message carries onto the diagnostic line of a record that could not be written", async () => {
+    await withSession(async (home) => {
+      const stderr = stderrSink();
+      const client = newClient(home.env, { clock: fakeClock("2026-10-13T08:12:00Z"), stderr: stderr.stream });
+      // An unknown key holding a line separator, written as a YAML escape: the config schema quotes the key with
+      // JSON.stringify, which leaves U+2028 raw, and the client writes the store's message on its own line.
+      const error = await on401InFlight(client, () => writeFile(home.configFile, 'version: 1\n"bad\\u2028key": 1\n'));
+      expect(error).toBeInstanceOf(AuthFailedError);
+      const lines = stderr.text().split("\n");
+      expect(lines).toHaveLength(3);
+      expect(lines[2]).toBe("");
+      expect(lines[0]).toBe("GET container: 401");
+      expect(lines[1]).toContain("could not record the authentication failure");
+      expect(lines[1]).toContain(String.raw`bad\u2028key`);
+      for (const line of lines) expect(lineBreaking(line), line).toEqual([]);
+    });
+  });
+
   it("a 401 on the config lookup is api, not auth-failed, with the hint naming the refused public bearer; nothing is recorded, no login (AC-22)", async () => {
     // Signing in again cannot help a refused public bearer (issue #5, the 401 rows). With a session in the config
     // file, so a failure wrongly recorded against it would show.
@@ -3200,6 +3218,28 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
       // One diagnostic line, ended by its own line feed.
       expect(stderr.text().endsWith("\n")).toBe(true);
       expect(lineBreaking(stderr.text().slice(0, -1))).toEqual([]);
+    });
+  });
+
+  it("redacts a transport failure's text before it escapes it, so a token after a scheme word and a line feed reaches neither the message nor the diagnostic line", async () => {
+    await withSession(async (home) => {
+      // An unregistered token after `Bearer` and a line feed: the bare Bearer shape takes any whitespace after the
+      // scheme word. Escaped first, the line feed would be `\u000a`, no longer whitespace, and the token would stay.
+      const token = `t${randomBytes(12).toString("hex")}`;
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .replyWithError(new Error(`synthetic proxy answer: Bearer\n${token}`));
+      const stderr = stderrSink();
+      const error = await caught(newClient(home.env, { stderr: stderr.stream }).get("container"));
+      expect(error).toBeInstanceOf(NetworkError);
+      const { message } = error as GripError;
+      for (const [sink, text] of [
+        ["message", message],
+        ["diagnostic line", stderr.text()],
+      ] as const) {
+        expect(text, sink).not.toContain(token);
+        expect(text, sink).toContain(String.raw`Bearer\u000a${REDACTED}`);
+      }
     });
   });
 
