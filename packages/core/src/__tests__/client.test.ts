@@ -2159,6 +2159,15 @@ describe("[CAP-CLIENT] AC-10 the errors the app matches on (docs/api/interest.md
     });
   });
 
+  it("a ConflictError built without a hint escapes every line-breaking character of the array's text in the hint it gives itself", () => {
+    // The client passes the excerpt it already cut as the hint; a caller that names none gets the array's own text.
+    const details = ["first\nGET container: 200", "a\u0085b\u2028c\u202ed"];
+    const error = new ConflictError("conflict", details);
+    expect(lineBreaking(error.hint)).toEqual([]);
+    expect(error.hint).toBe(String.raw`first\u000aGET container: 200; a\u0085b\u2028c\u202ed`);
+    expect(error.details).toEqual(details);
+  });
+
   it("the two documented reasons decide the kind on every status but 401 and a 3xx, a JSON 403 and a 429 included, each from one request", async () => {
     // The pages record the body text only, never a status ("none seen live"), so the reason decides the kind on
     // every status the classifier reads a reason on: a cap answered with 403 reaches the write items as swipe-cap,
