@@ -2406,7 +2406,7 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
     });
   });
 
-  it("refuses, before the first request, a pauseMs that is not a finite number from 0 to 2147483647 ms, the longest a timer waits", async () => {
+  it("raises the usage kind, before the first request, for a pauseMs that is not a finite number from 0 to 2147483647 ms, the longest a timer waits", async () => {
     await withSession(async (home) => {
       const client = newClient(home.env);
       const refused = [Number.NaN, -1, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2_147_483_648];
@@ -2416,7 +2416,9 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
             for await (const entry of client.pages("container/1/search/", { sort: "name" }, { pauseMs })) void entry;
           })(),
         );
-        expect(error, String(pauseMs)).toBeInstanceOf(TypeError);
+        // Issue #5 § `GripClient` (amended 2026-10-15): a pauseMs that is not a non-negative finite number is the usage kind.
+        expect(error, String(pauseMs)).toBeInstanceOf(UsageError);
+        expect((error as GripError).kind, String(pauseMs)).toBe("usage");
         expect((error as Error).message, String(pauseMs)).toContain(`: ${String(pauseMs)}`);
       }
       expect(calls()).toHaveLength(0);
@@ -2494,7 +2496,7 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
     });
   });
 
-  it("sends `page` first, where docs/api/attendees.md § Directory search records the verified call, and never a `page` of the caller's query", async () => {
+  it("sends `page` first, where docs/api/attendees.md § Directory search records the verified call, then the caller's query as given", async () => {
     await withSession(async (home) => {
       const sent: string[] = [];
       pool()
@@ -2505,13 +2507,41 @@ describe("[CAP-PACING] AC-11 paging with a pause, AC-12 one request in flight", 
           return page === 1 ? success200([{ id: 1 }]) : success200([]);
         })
         .times(2);
-      // The caller's own `page` key, wherever it stands, gives way to the page the iteration asks for.
-      const query = { sort: "name", page: 9, type_id: "1,2" };
+      // Issue #5 § `GripClient` (amended 2026-10-15): the caller's query is sent as given, a key the client does not
+      // know included; the client adds `page` and no page-size parameter.
+      const query = { sort: "name", type_id: "1,2", per_page: 50 };
       for await (const entry of newClient(home.env).pages("container/1/search/", query)) void entry;
       expect(sent).toEqual([
-        "/1/container/1/search/?page=1&sort=name&type_id=1,2",
-        "/1/container/1/search/?page=2&sort=name&type_id=1,2",
+        "/1/container/1/search/?page=1&sort=name&type_id=1,2&per_page=50",
+        "/1/container/1/search/?page=2&sort=name&type_id=1,2&per_page=50",
       ]);
+    });
+  });
+
+  it("raises the usage kind, before any request, when the path carries a query string or the query holds a page key", async () => {
+    await withSession(async (home) => {
+      // Issue #5 § `GripClient` (amended 2026-10-15): the client owns paging, so a second source of `page` or of a
+      // query is refused rather than sent as two `page` parameters or merged.
+      const refused: [string, Record<string, string | number>][] = [
+        ["container/1/search/?page=3", { sort: "name" }],
+        ["container/1/search/?sort=name", {}],
+        ["container/1/search/?", { sort: "name" }],
+        ["container/1/search/", { sort: "name", page: 9 }],
+        ["container/1/search/", { page: 1 }],
+      ];
+      const client = newClient(home.env);
+      for (const [path, query] of refused) {
+        const label = `${path} ${JSON.stringify(query)}`;
+        const error = await caught(
+          (async () => {
+            for await (const entry of client.pages(path, query)) void entry;
+          })(),
+        );
+        expect(error, label).toBeInstanceOf(UsageError);
+        expect((error as GripError).kind, label).toBe("usage");
+        expect((error as Error).message, label).toContain("pages");
+      }
+      expect(calls()).toHaveLength(0);
     });
   });
 

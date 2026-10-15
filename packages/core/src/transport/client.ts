@@ -77,6 +77,7 @@ import {
   SwipeCapError,
   ThrottledError,
   UnknownSlugError,
+  UsageError,
   bodyExcerpt,
   conflictText,
   errorCode,
@@ -471,20 +472,33 @@ export class GripClient {
    * The pages of a list: `page=1`, `page=2`, ... ahead of the same query, each entry of each non-empty
    * `data` array in order, until the first request whose `data` is empty; that request is the
    * final one. Never two pages in flight; `pauseMs` waits on the clock between pages with nothing
-   * in flight, and one that is not a finite number from 0 to `LONGEST_TIMER_MS` is refused before the first request.
-   * No page-size parameter is ever sent (`docs/api/attendees.md` § Directory search).
+   * in flight. The client adds `page` and never a page-size parameter; the caller's query is sent as given. Before the
+   * first request, the usage kind refuses a path that carries a query string, a query that holds a `page` key (the
+   * client owns paging) and a `pauseMs` that is not a finite number from 0 to `LONGEST_TIMER_MS` (issue #5
+   * § `GripClient`, amended 2026-10-15).
    */
   async *pages<T = unknown>(path: string, query: Query, options: PagesOptions<T> = {}): AsyncIterable<T> {
     // The query and the options as they stand when iteration starts: every page is built from this copy, whatever
     // the caller does to its own objects between pages. `page` goes ahead of the query, where `docs/api/attendees.md`
-    // § Directory search records the verified call (`page=<n>&sort=name&type_id=<ids>`), and a `page` key of the
-    // caller's gives way to the page the iteration asks for.
+    // § Directory search records the verified call (`page=<n>&sort=name&type_id=<ids>`).
     const fixedQuery: Query = { ...query };
-    delete fixedQuery["page"];
     const { pauseMs = 0, schema } = options;
+    if (path.includes("?")) {
+      throw new UsageError(
+        `GripClient: pages() takes its query as an argument, not in the path: ${quoted(path)}`,
+        "pass the query as the second argument of pages()",
+      );
+    }
+    if (Object.hasOwn(fixedQuery, "page")) {
+      throw new UsageError(
+        "GripClient: pages() sets the page itself, so the query must not hold a page key",
+        "remove page from the query",
+      );
+    }
     if (!Number.isFinite(pauseMs) || pauseMs < 0 || pauseMs > LONGEST_TIMER_MS) {
-      throw new TypeError(
-        `GripClient: pauseMs is a wait in milliseconds from 0 to ${String(LONGEST_TIMER_MS)}, the longest a timer waits: ${String(pauseMs)}`,
+      throw new UsageError(
+        `GripClient: pages() takes a pauseMs in milliseconds from 0 to ${String(LONGEST_TIMER_MS)}, the longest a timer waits: ${String(pauseMs)}`,
+        "pass a pauseMs from 0 to 2147483647",
       );
     }
     for (let page = 1; ; page += 1) {
