@@ -2770,6 +2770,25 @@ describe("[CAP-CLIENT] AC-13 a redirect is never followed", () => {
       expect(calls().filter((call) => call.origin !== API_ORIGIN)).toEqual([]);
     });
   });
+
+  it("raises api with the hint HTTP 302 on a 302 whose body is the swipe-cap reason: on a 3xx the status alone decides", async () => {
+    // On every other status but 401 the swipe-cap reason decides the kind (AC-10); the 3xx row comes first.
+    await withSession(async (home) => {
+      pool()
+        .intercept({ path: WRITE_WIRE_PATH, method: "POST" })
+        .reply(() => swipeCapAnswer(302));
+      const error = await caught(newClient(home.env).post(WRITE_PATH, { message: "" }));
+      expect(error).toBeInstanceOf(ApiError);
+      const gripError = error as GripError;
+      expect(gripError.kind).toBe("api");
+      expect(gripError.status).toBe(302);
+      expect(gripError.hint).toBe("HTTP 302");
+      expect(gripError.message).toBe(
+        `POST ${WRITE_PATH}: the platform answered HTTP 302 with a redirect, which the tool never follows`,
+      );
+      expect(calls()).toHaveLength(1);
+    });
+  });
 });
 
 /** A dispatcher that streams a body of `total` bytes in `chunk`-sized pieces until the client aborts. */
