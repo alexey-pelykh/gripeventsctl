@@ -20,11 +20,12 @@
  *   whole schedule. A signal that cancels a call while it waits is a requirement of #11.
  * - Every answer is classified once, in the order the doc comment of `#classify` lists, into
  *   exactly one error class of `errors.ts`.
- * - Diagnostic lines on the injected `stderr`: one per answer with the method, the path template
- *   (every numeric segment as `<id>`, no query value) and the status, plus one per 429 wait naming
- *   the wait and the retry; never a header value or a body; every line through `redactString`, then with
- *   every line-breaking character escaped, so it stays one line. An error message names the path as the caller
- *   passed it.
+ * - Diagnostic lines on the injected `stderr`, one per attempt: the method, the path template
+ *   (every numeric segment as `<id>`, no query value) and the status; where a 429 runs the backoff schedule, its
+ *   line also names the wait before the next retry and its number, or that the schedule has ended; where the
+ *   attempt failed, what failed, with the status where it had arrived. One more line where a 401 could not be
+ *   recorded beside the session. Never a header value or a body; every line through `redactString`, then with every
+ *   line-breaking character escaped, so it stays one line. An error message names the path as the caller passed it.
  *
  * The client uses the platform's plain HTTPS stack and sets no TLS option. It never signs in on
  * its own: `login()` runs only when the sign-in command calls it with the user's credentials.

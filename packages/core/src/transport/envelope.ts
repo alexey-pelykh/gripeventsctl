@@ -56,7 +56,10 @@ export function envelopeOf(body: unknown): Envelope | undefined {
   return result.success ? { success: result.data.success, data: result.data.data } : undefined;
 }
 
-/** `data` as one line of text: a string as it is, anything else as JSON. */
+/**
+ * `data` as text: a string as it is, line breaks included; `undefined` as the empty string; anything else as its JSON
+ * text, or a placeholder where it cannot be serialised.
+ */
 export function dataText(data: unknown): string {
   if (typeof data === "string") return data;
   if (data === undefined) return "";
