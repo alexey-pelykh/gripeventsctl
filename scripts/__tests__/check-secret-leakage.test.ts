@@ -82,6 +82,9 @@ function shapedFiles(secrets: Secrets): Record<string, string> {
     // The header recorded as a name/value pair, as a HAR capture records it, in either order.
     "x-authorization-name-value.har": `${JSON.stringify({ headers: [{ name: "X-Authorization", value: secrets.sessionToken }] }, null, 2)}\n`,
     "x-authorization-value-name.json": `${JSON.stringify({ headers: [{ value: secrets.sessionToken, name: "X-Authorization" }] })}\n`,
+    // The same pair pretty-printed, then held as a JSON string: the line break between its members is escaped.
+    "x-authorization-name-value-escaped-pretty.json": `${JSON.stringify(JSON.stringify({ headers: [{ name: "X-Authorization", value: secrets.sessionToken }] }, null, 2))}\n`,
+    "x-authorization-value-name-escaped-pretty.json": `${JSON.stringify(JSON.stringify({ headers: [{ value: secrets.sessionToken, name: "X-Authorization" }] }, null, 2))}\n`,
   };
 }
 
