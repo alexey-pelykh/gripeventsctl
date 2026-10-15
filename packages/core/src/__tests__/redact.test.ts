@@ -196,6 +196,12 @@ describe("redaction over a whole answer body (an error redacts up to the 16 MiB 
       `"grip_cdp_token": "aaaaaaaa${backslashes}`,
       `${String.raw`\"grip_cdp_token\": \"aaaaaaaa`}${backslashes}`,
       `"grip_cdp_token": "aaaaaaaa${backslashes} `,
+      // After the first member of a name/value pair, a run of backslashes and a run of escaped line breaks, with no
+      // second member after either.
+      `"name": "X-Authorization",${backslashes}`,
+      `"name": "X-Authorization",${"\\n".repeat(BODY_CAP_BYTES / 2)}`,
+      `"value": "${sessionToken}",${backslashes}`,
+      `"value": "${sessionToken}",${"\\n".repeat(BODY_CAP_BYTES / 2)}`,
     ];
     for (const input of inputs) {
       expect(redactString(input) === input, input.slice(0, 24)).toBe(true);
@@ -339,6 +345,28 @@ describe("the key-context shapes in the JSON-escaped form and in the name/value 
           "escaped",
           JSON.stringify(JSON.stringify(har)),
           (out: string): unknown => JSON.parse(JSON.parse(out) as string),
+        ],
+        // Pretty-printed, then held as a JSON string: the line break between the two members is a backslash and an
+        // `n`, or `\r\n`, and an indentation of tabs is escaped too.
+        [
+          "escaped pretty",
+          JSON.stringify(JSON.stringify(har, null, 2)),
+          (out: string): unknown => JSON.parse(JSON.parse(out) as string),
+        ],
+        [
+          "escaped pretty, CRLF",
+          JSON.stringify(JSON.stringify(har, null, 2).replaceAll("\n", "\r\n")),
+          (out: string): unknown => JSON.parse(JSON.parse(out) as string),
+        ],
+        [
+          "escaped pretty, tab indentation",
+          JSON.stringify(JSON.stringify(har, null, "\t")),
+          (out: string): unknown => JSON.parse(JSON.parse(out) as string),
+        ],
+        [
+          "escaped twice, pretty",
+          JSON.stringify(JSON.stringify(JSON.stringify(har, null, 2))),
+          (out: string): unknown => JSON.parse(JSON.parse(JSON.parse(out) as string) as string),
         ],
       ] as const) {
         const title = `${Object.keys(pair).join(" then ")}, ${label}`;

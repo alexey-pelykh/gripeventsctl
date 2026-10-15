@@ -16,7 +16,9 @@
  *   recorded as a name/value pair (`"name": "X-Authorization", "value": "<uuid>"`, in either order).
  *
  * Every key context is matched in plain text and in the JSON-escaped form a JSON string holding JSON
- * text carries, where each quote follows one or more backslashes (`\"user_token\": \"<uuid>\"`).
+ * text carries, where each quote follows one or more backslashes (`\"user_token\": \"<uuid>\"`), and
+ * so is a name/value pair pretty-printed before it was escaped, whose members are parted by an
+ * escaped line break and indentation (`\n  \"value\"`).
  * `redactString` replaces the value and keeps the backslashes before its closing quote, so an escaped
  * capture stays well formed.
  * - Chat token: the AWS Cognito token the login call returns under `chat_token.Token`, a long
@@ -47,8 +49,9 @@
  * Every pattern takes time linear in its input and never throws on one: an error redacts a whole
  * answer body, up to the client's 16 MiB cap, before it cuts the excerpt (`transport/errors.ts`). So
  * a repeated value character is spelt `X{n}X*` (see `atLeast`), the chat-token pattern starts a
- * match only at the first `eyJ` of its run (see `JWT_PATTERN_SOURCE`), and no value whose class takes a
- * backslash is followed by a quote that may be escaped (see `QUOTE_SOURCE`).
+ * match only at the first `eyJ` of its run (see `JWT_PATTERN_SOURCE`), no run whose class takes a
+ * backslash is followed by a quote that may be escaped (see `QUOTE_SOURCE`), and the space between two
+ * members of a name/value pair is one character class (see `MEMBER_SPACE_SOURCE`).
  *
  * The live-secret registry holds, in memory only, the secret values this process has handled (the
  * session token once it is resolved from the config, the output of the 1Password CLI, the tokens
@@ -62,15 +65,25 @@ export const UUID_PATTERN_SOURCE = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4
 
 /**
  * A double quote, plain or JSON-escaped once or more (`"`, `\"`, `\\\"`). A pattern never starts with it: each
- * starts at a literal key or scheme word. And it never follows a value whose class takes a backslash: the two would
- * share the backslashes before the quote, and a run of them with no quote after it would be split between the two
- * every way, which takes time quadratic in the run. So a run of backslashes is read a bounded number of times for each
- * key before it, never once for each of its characters.
+ * starts at a literal key or scheme word. And it never follows a run whose class takes a backslash, a value's or the
+ * space between two members: the two would share the backslashes before the quote, and a run of them with no quote
+ * after it would be split between the two every way, which takes time quadratic in the run. So a run of backslashes is
+ * read a bounded number of times for each key before it, never once for each of its characters.
  */
 const QUOTE_SOURCE = String.raw`\\*"`;
 
 /** A key's optional closing quote, `:` or `=`, and the value's optional opening quote, plain or JSON-escaped. */
 const KEY_SEPARATOR_SOURCE = String.raw`(?:\\*["'])?\s*[:=]\s*(?:\\*["'])?`;
+
+/**
+ * The space after the comma between two members of a JSON object, up to the next member's opening quote: whitespace,
+ * and the line breaks and indentation of an object pretty-printed and then held as a JSON string, escaped once or more
+ * (`\n`, `\r\n`, `\t`, `\\n`), with the backslashes of that quote. One character class, so the engine reads a run of any
+ * length without keeping a backtrack entry for each character: a repeated group of whitespace or an escape keeps one,
+ * and threw `RangeError` on a body-cap run of escaped line breaks (Node 26.11.1, 2026-10-15). The quote after it is a
+ * plain one (see `QUOTE_SOURCE`).
+ */
+const MEMBER_SPACE_SOURCE = String.raw`[\s\\nrt]*`;
 
 /** A session token after the `user_token` key or the `X-Authorization` header name. Groups: key, separator, token. */
 export const SESSION_TOKEN_PATTERN_SOURCE =
@@ -78,11 +91,11 @@ export const SESSION_TOKEN_PATTERN_SOURCE =
 
 /**
  * A session token as the value of the `X-Authorization` header recorded as a name/value pair, the name first
- * (`"name": "X-Authorization", "value": "<uuid>"`, as a HAR capture records a header). Groups: the pair up to the
- * value's opening quote, the token.
+ * (`"name": "X-Authorization", "value": "<uuid>"`, as a HAR capture records a header), the members parted by
+ * `MEMBER_SPACE_SOURCE`. Groups: the pair up to the value's opening quote, the token.
  */
 export const SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE =
-  String.raw`("name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization${QUOTE_SOURCE}\s*,\s*${QUOTE_SOURCE}value${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
+  String.raw`("name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization${QUOTE_SOURCE}\s*,${MEMBER_SPACE_SOURCE}"value${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
   UUID_PATTERN_SOURCE +
   ")";
 
@@ -95,7 +108,7 @@ export const SESSION_TOKEN_NAME_VALUE_PATTERN_SOURCE =
 export const SESSION_TOKEN_VALUE_NAME_PATTERN_SOURCE =
   String.raw`("value${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
   UUID_PATTERN_SOURCE +
-  String.raw`)(${QUOTE_SOURCE}\s*,\s*${QUOTE_SOURCE}name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization)`;
+  String.raw`)(${QUOTE_SOURCE}\s*,${MEMBER_SPACE_SOURCE}"name${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE}x-authorization)`;
 
 /**
  * At least `count` of the one-character class `characterClass`, as `X{count}X*`. `X{count,}` matches
