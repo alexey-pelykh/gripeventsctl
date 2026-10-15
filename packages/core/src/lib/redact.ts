@@ -46,8 +46,9 @@
  *
  * Every pattern takes time linear in its input and never throws on one: an error redacts a whole
  * answer body, up to the client's 16 MiB cap, before it cuts the excerpt (`transport/errors.ts`). So
- * a repeated value character is spelt `X{n}X*` (see `atLeast`), and the chat-token pattern starts a
- * match only at the first `eyJ` of its run (see `JWT_PATTERN_SOURCE`).
+ * a repeated value character is spelt `X{n}X*` (see `atLeast`), the chat-token pattern starts a
+ * match only at the first `eyJ` of its run (see `JWT_PATTERN_SOURCE`), and no value whose class takes a
+ * backslash is followed by a quote that may be escaped (see `QUOTE_SOURCE`).
  *
  * The live-secret registry holds, in memory only, the secret values this process has handled (the
  * session token once it is resolved from the config, the output of the 1Password CLI, the tokens
@@ -61,7 +62,10 @@ export const UUID_PATTERN_SOURCE = String.raw`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4
 
 /**
  * A double quote, plain or JSON-escaped once or more (`"`, `\"`, `\\\"`). A pattern never starts with it: each
- * starts at a literal key or scheme word, so a long run of backslashes costs one pass per key, never one per character.
+ * starts at a literal key or scheme word. And it never follows a value whose class takes a backslash: the two would
+ * share the backslashes before the quote, and a run of them with no quote after it would be split between the two
+ * every way, which takes time quadratic in the run. So a run of backslashes is read a bounded number of times for each
+ * key before it, never once for each of its characters.
  */
 const QUOTE_SOURCE = String.raw`\\*"`;
 
@@ -163,13 +167,15 @@ export const APPLICATION_TOKEN_PATTERN_SOURCE =
 
 /**
  * The `grip_cdp_token` of a config answer in its JSON key-value form. The quoted key and the quoted value are both
- * required: a page naming the field in prose, an unquoted value and a placeholder never match. Groups: the key up to
- * the value's opening quote, the value, the closing quote.
+ * required: a page naming the field in prose, an unquoted value and a placeholder never match. The value closes on a
+ * plain quote: the value's class takes the backslashes of an escaped closing quote, and `redactString` keeps them
+ * (see `QUOTE_SOURCE` for why the closing quote does not take them). Groups: the key up to the value's opening quote,
+ * the value, the closing quote.
  */
 export const GRIP_CDP_TOKEN_PATTERN_SOURCE =
   String.raw`("grip_cdp_token${QUOTE_SOURCE}\s*:\s*${QUOTE_SOURCE})(` +
   atLeast(TOKEN_CHARACTER_SOURCE, 8) +
-  String.raw`)(${QUOTE_SOURCE})`;
+  String.raw`)(")`;
 
 /**
  * A bare `Bearer <token>` value. Groups: scheme, token. Run time only: the docs print the public bootstrap bearer this
