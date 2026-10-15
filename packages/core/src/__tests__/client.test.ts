@@ -912,6 +912,39 @@ describe("[CAP-CLIENT] AC-03 the config lookup by slug (docs/api/containers.md Â
     });
   });
 
+  it("raises unknown-slug on the exact documented reason of a 404 lookup only: a reason that only holds the text, the text on another status and the text on another path are api", async () => {
+    await withSession(async (home) => {
+      const documented = "No results found for this container name";
+      const client = newClient(home.env);
+      const lookup = "/1/config?container_name=nosuchslug1";
+      const answers: [string, string, () => Promise<unknown>, string, number][] = [
+        [
+          "a lookup 404 whose reason holds the text among other words",
+          lookup,
+          () => client.lookupConfig("nosuchslug1"),
+          `${documented} or alias`,
+          404,
+        ],
+        ["the text on a lookup 400", lookup, () => client.lookupConfig("nosuchslug1"), documented, 400],
+        ["the text on an authenticated 404", "/1/container", () => client.get("container"), documented, 404],
+      ];
+      for (const [label, path, call, reason, status] of answers) {
+        pool()
+          .intercept({ path, method: "GET" })
+          .reply(() => failure(reason, status));
+        const error = await caught(call());
+        expect(error, label).toBeInstanceOf(ApiError);
+        const gripError = error as GripError;
+        expect(gripError.kind, label).toBe("api");
+        expect(gripError.status, label).toBe(status);
+        // The row for any other `success: false`: the reason is the message tail and the hint.
+        expect(gripError.message, label).toContain(`: HTTP ${String(status)}: ${reason}`);
+        expect(gripError.hint, label).toBe(reason);
+      }
+      expect(calls()).toHaveLength(answers.length);
+    });
+  });
+
   it("raises api naming the field when a documented field is missing, and never returns a partial object", async () => {
     await withTempHome(async (home) => {
       pool()
