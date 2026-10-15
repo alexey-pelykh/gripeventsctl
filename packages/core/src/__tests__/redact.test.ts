@@ -136,9 +136,11 @@ describe("the grip_cdp_token shape (issue #5 § Redaction: the JSON key-value fo
 });
 
 describe("redaction over a whole answer body (an error redacts up to the 16 MiB body cap before it cuts the excerpt)", () => {
-  it("redacts a run of eyJ with no dot in time linear in its length, and still replaces a JWT-shaped value after a long eyJ run", () => {
-    // The fastest of five passes, after one to warm up: a run eight times as long takes about eight times as long
-    // when the work is linear, and 64 times when it is quadratic. The ratio holds on any machine.
+  it("redacts a run of eyJ with no dot in time linear in its length (skipped where a run takes too little time to measure)", (context) => {
+    // The fastest of five passes, after one to warm up: a run 16 times as long takes about 16 times as long when the
+    // work is linear, and 256 times when it is quadratic. The bound, 64, is four times the linear ratio and a quarter of
+    // the quadratic one, so noise that slows every pass of the long run fourfold still passes linear work, and quadratic
+    // work passes only where every pass of its short run measures four times slower than it ran.
     const fastest = (run: string): number => {
       expect(redactString(run)).toBe(run);
       let best = Number.POSITIVE_INFINITY;
@@ -149,9 +151,26 @@ describe("redaction over a whole answer body (an error redacts up to the 16 MiB 
       }
       return best;
     };
-    const short = "eyJ".repeat(Math.ceil((8 * 1024) / 3));
+    const eyJRun = (length: number): string => "eyJ".repeat(Math.ceil(length / 3));
+    // The short run doubles until one redaction of it takes long enough to time against scheduling noise, at most up
+    // to the length whose long run is the body cap; where even that is too fast, the case cannot decide and skips.
+    const measurableMs = 2;
+    let length = 8 * 1024;
+    let short = fastest(eyJRun(length));
+    while (short < measurableMs && length * 32 <= BODY_CAP_BYTES) {
+      length *= 2;
+      short = fastest(eyJRun(length));
+    }
+    if (short < measurableMs) {
+      context.skip(
+        `a run of ${String(length)} characters takes ${short.toFixed(3)} ms here, under the ${String(measurableMs)} ms this case can time`,
+      );
+    }
+    expect(fastest(eyJRun(length * 16)) / short).toBeLessThan(64);
+  });
+
+  it("still replaces a JWT-shaped value after a long run of eyJ", () => {
     const run = "eyJ".repeat(Math.ceil((64 * 1024) / 3));
-    expect(fastest(run) / fastest(short)).toBeLessThan(24);
     const { chatToken } = fixtureSecrets();
     // Apart from the run, the token alone goes; joined to it, the match starts at the run's first `eyJ`, as before.
     expect(redactString(`${run} ${chatToken}`)).toBe(`${run} ${REDACTED}`);
