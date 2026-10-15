@@ -386,6 +386,23 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(result.stderr).not.toContain(secrets.sessionToken);
   });
 
+  it("R27: prints a path through redactString, so a secret-shaped value in a file's name is hidden on its finding line", () => {
+    // A path is text a token can sit in: here a session token after `user_token=`, in the name of a file whose content
+    // holds a chat token, so the lint prints the path on a finding line.
+    const secrets = fixtureSecrets();
+    write(`fixtures/user_token=${secrets.sessionToken}.txt`, `token=${secrets.chatToken}\n`);
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(
+      /^fixtures\/user_token=<REDACTED>\.txt:1: secret-shaped value \[a JWT, such as the chat token\]: /mu,
+    );
+    expect(result.stderr).not.toContain(secrets.sessionToken);
+    expect(result.stderr).not.toContain(secrets.chatToken);
+  });
+
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
     write(
       "docs/prose.md",
