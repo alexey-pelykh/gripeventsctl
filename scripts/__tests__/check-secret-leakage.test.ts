@@ -403,6 +403,21 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(result.stderr).not.toContain(secrets.chatToken);
   });
 
+  it("R28: escapes a line separator, a C1 control or a direction control in a path it prints, so each finding stays on one line, in the order written", () => {
+    // `git ls-files -z` gives a path as it is, where a listing line by line quoted it. A Windows file name may hold each
+    // of these characters, and no C0 control character.
+    const secrets = fixtureSecrets();
+    write("fixtures/first\u2028second\u202ethird\u0085.txt", `X-Authorization: ${secrets.sessionToken}\n`);
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/^fixtures\/first\\u2028second\\u202ethird\\u0085\.txt:1: secret-shaped value \[/mu);
+    expect(result.stderr).not.toMatch(/[\u0085\u2028\u202e]/u);
+    expect(result.stderr).not.toContain(secrets.sessionToken);
+  });
+
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
     write(
       "docs/prose.md",

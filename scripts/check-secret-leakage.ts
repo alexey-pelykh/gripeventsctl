@@ -11,7 +11,8 @@
  * development. Each file is matched as a whole, not line by line, so a pretty-printed capture whose
  * key context sits on an earlier line than the value is caught too; a finding is reported at the line
  * its match starts on, with the name of its shape and a prefix of the match redacted, and the FAIL
- * message gives the remedy `SECRET_SHAPES` names for each shape found.
+ * message gives the remedy `SECRET_SHAPES` names for each shape found. A path is printed redacted, then
+ * with each line-breaking or direction character escaped (`escapeLineBreaks`), so its line stays whole.
  *
  * The patterns live ONCE, in `packages/core/src/lib/redact.ts`, and are consumed by both this
  * lint-time check and the runtime redaction path. Extending either side means extending
@@ -36,6 +37,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { SECRET_PATTERN_SOURCES, SECRET_SHAPES, redactString } from "../packages/core/src/lib/redact.js";
+import { escapeLineBreaks } from "../packages/core/src/transport/errors.js";
 
 const EXCLUDED_PATH_PREFIXES = [
   ".tmp/",
@@ -187,10 +189,12 @@ function main(): void {
     if (shouldSkipPath(relativePath)) continue;
     const absPath = join(repoRoot, relativePath);
     const result = scanFile(absPath);
-    // Every line names the file through redactString too: a path is text a token can sit in.
-    const shown = redactString(relativePath);
+    // Every line names the file through redactString too: a path is text a token can sit in. Then each line-breaking or
+    // direction character is escaped: `git ls-files -z` gives a path as it is, and such a character would split the
+    // line or reorder it as a terminal shows it. The reason a file could not be read names the path as well.
+    const shown = escapeLineBreaks(redactString(relativePath));
     if ("unreadable" in result) {
-      process.stderr.write(`${shown}: not scanned: ${redactString(result.unreadable)}\n`);
+      process.stderr.write(`${shown}: not scanned: ${escapeLineBreaks(redactString(result.unreadable))}\n`);
       unreadable += 1;
       continue;
     }
