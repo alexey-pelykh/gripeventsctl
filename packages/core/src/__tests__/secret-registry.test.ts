@@ -58,7 +58,8 @@ describe("[CAP-REDACT] the live-secret registry", () => {
     expect(redactString(`v=${outer}.`)).toBe(`v=${REDACTED}.`);
   });
 
-  it("still applies the pattern replacements first", () => {
+  it("redacts a pattern-shaped value no registration covers, keeping its key", () => {
+    // A per-run token never registered: the session-token pattern alone hides it.
     const token = fixtureSecrets().sessionToken;
     expect(redactString(`user_token: ${token}`)).toBe(`user_token: ${REDACTED}`);
   });
