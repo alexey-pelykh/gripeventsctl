@@ -770,6 +770,48 @@ describe("[CAP-CLIENT] AC-02 the header set on authenticated calls", () => {
     }
   });
 
+  it("sends a stored session token padded with HTTP whitespace, a line feed included, cut of it, and redacts the cut value from an error that echoes it and from the diagnostic line", async () => {
+    await withTempHome(async (home) => {
+      // The store registers the token as stored, padding included; only the value cut of it is what the platform can
+      // echo, so the client registers that form too. The check of a valid header value runs on the cut value.
+      const token = fixtureSecrets().sessionToken;
+      await saveConfig(sessionConfig(`\n \t${token} \r\n`), { env: home.env });
+      const stderr = stderrSink();
+      const client = newClient(home.env, { stderr: stderr.stream });
+
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => containerList200());
+      await client.get("container");
+      expect(lowerHeaders(calls()[0]?.headers)["x-authorization"]).toBe(token);
+
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .reply(() => failure(`unknown session ${token}`, 400));
+      const answered = await caught(client.get("container"));
+      expect(answered).toBeInstanceOf(ApiError);
+      const { message, hint, bodyExcerpt } = answered as GripError;
+      for (const [sink, text] of Object.entries({ message, hint, bodyExcerpt: bodyExcerpt ?? "" })) {
+        expect(text, sink).not.toContain(token);
+        expect(text, sink).toContain(`unknown session ${REDACTED}`);
+      }
+
+      pool()
+        .intercept({ path: "/1/container", method: "GET" })
+        .replyWithError(new Error(`synthetic proxy answer: unknown session ${token}`));
+      const failed = await caught(client.get("container"));
+      expect(failed).toBeInstanceOf(NetworkError);
+      for (const [sink, text] of [
+        ["message", (failed as GripError).message],
+        ["diagnostic line", stderr.text()],
+      ] as const) {
+        expect(text, sink).not.toContain(token);
+        expect(text, sink).toContain(`unknown session ${REDACTED}`);
+      }
+      expect(calls()).toHaveLength(3);
+    });
+  });
+
   it.skipIf(!STUB_OP_SUPPORTED)(
     `refuses, before any request, an empty session token read through an op:// reference, naming the reference, and resolves it again on the next call${POSIX_ONLY}`,
     async () => {
