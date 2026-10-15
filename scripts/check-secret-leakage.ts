@@ -18,7 +18,7 @@
  * `redact.ts`; this script picks the change up automatically.
  *
  * Scope:
- *   - Tracked files only (`git ls-files`); untracked and git-ignored files are not the concern.
+ *   - Tracked files only (`git ls-files -z`); untracked and git-ignored files are not the concern.
  *   - Excludes `.tmp/` (where captured tokens may legitimately sit), binary files, lockfiles,
  *     this script, the source-of-truth module and the test that exercises it.
  *   - Every other tracked file is read whole, whatever its size. A file that cannot be read (deleted
@@ -79,16 +79,18 @@ function shouldSkipPath(relativePath: string): boolean {
   return false;
 }
 
+/**
+ * Every tracked path, read NUL-separated: line by line, git quotes a path that holds a byte outside printable ASCII
+ * and escapes its bytes (`core.quotePath`), and no file has the quoted name. Each path is kept as git gives it, spaces
+ * at its ends included.
+ */
 function listTrackedFiles(repoRoot: string): string[] {
-  const stdout = execSync("git ls-files", {
+  const stdout = execSync("git ls-files -z", {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  return stdout.split("\0").filter((path) => path.length > 0);
 }
 
 /** A pattern the lint applies, with the name and the remedy `SECRET_SHAPES` gives its source. */
