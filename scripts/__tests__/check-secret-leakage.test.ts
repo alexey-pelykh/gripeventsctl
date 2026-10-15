@@ -341,6 +341,34 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(result.stderr).not.toContain(basic);
   });
 
+  it("R25: prints the prefix of a value-first name/value pair as its key up to the token and then `<REDACTED>`, with no character of the token", () => {
+    // The value-first shape's match runs on to the header name after the token, so the match redacted alone hides the
+    // token. A match that stopped at the token would leave it to no shape, and the prefix would hold its first
+    // characters after the key: two or three, under the five-character run R16 looks for.
+    const { sessionToken } = fixtureSecrets();
+    const pair = { headers: [{ value: sessionToken, name: "X-Authorization" }] };
+    const forms: [string, string, string][] = [
+      ["value-name-compact.json", JSON.stringify(pair), '"value":"<RE'],
+      ["value-name-pretty.json", JSON.stringify(pair, null, 2), '"value": "<R'],
+      ["value-name-escaped.json", JSON.stringify(JSON.stringify(pair)), String.raw`"value\":\"<`],
+    ];
+    for (const [name, content] of forms) write(`fixtures/${name}`, `${content}\n`);
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    for (const [name, , expected] of forms) {
+      const line = result.stderr.split("\n").find((candidate) => candidate.startsWith(`fixtures/${name}:`));
+      const prefix =
+        /secret-shaped value \[a session token in an X-Authorization name\/value pair\]: (.*)… \(\d+ chars\)$/u.exec(
+          line ?? "",
+        )?.[1];
+      expect(prefix, line).toBe(expected);
+    }
+    expect(result.stderr).not.toContain(sessionToken);
+  });
+
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
     write(
       "docs/prose.md",
