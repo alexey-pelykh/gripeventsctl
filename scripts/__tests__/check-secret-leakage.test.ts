@@ -369,6 +369,23 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(result.stderr).not.toContain(sessionToken);
   });
 
+  it("R26: scans a tracked file whose path holds a non-ASCII character, under its own name", () => {
+    // Line by line, `git ls-files` quotes such a path and escapes its bytes (`"fixtures/caf\303\251-capture.txt"`), and
+    // no file has that name.
+    const secrets = fixtureSecrets();
+    write("fixtures/café-capture.txt", `X-Authorization: ${secrets.sessionToken}\n`);
+    write("docs/données.md", "nothing secret here\n");
+    commitAll();
+
+    const result = runCheck();
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/^fixtures\/café-capture\.txt:1: secret-shaped value \[/mu);
+    expect(result.stderr).not.toContain("not scanned");
+    expect(result.stderr).not.toContain("could not be read");
+    expect(result.stderr).not.toContain(secrets.sessionToken);
+  });
+
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
     write(
       "docs/prose.md",
