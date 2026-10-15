@@ -191,8 +191,17 @@ describe("redaction over a whole answer body (an error redacts up to the 16 MiB 
       `"general": {${backslashes}`,
       `"name${backslashes}`,
       `"value": "${sessionToken}${backslashes}`,
+      // The grip_cdp_token value class takes a backslash: its value, then the run, with no quote after the run, plain
+      // and escaped, and with the run ended by a character the class refuses that is not a quote.
+      `"grip_cdp_token": "aaaaaaaa${backslashes}`,
+      `${String.raw`\"grip_cdp_token\": \"aaaaaaaa`}${backslashes}`,
+      `"grip_cdp_token": "aaaaaaaa${backslashes} `,
     ];
-    for (const input of inputs) expect(redactString(input) === input, input.slice(0, 24)).toBe(true);
+    for (const input of inputs) {
+      expect(redactString(input) === input, input.slice(0, 24)).toBe(true);
+      // The leakage lint compiles the same sources with its own flags.
+      expect(lintMatches(input), input.slice(0, 24)).toEqual([]);
+    }
   });
 });
 
