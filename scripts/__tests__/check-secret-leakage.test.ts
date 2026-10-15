@@ -282,8 +282,9 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(footer).toMatch(/^FAIL: found 4 secret-shaped value\(s\) in tracked source/u);
     // One remedy line per remedy, naming every shape found that it fits; the password for a Basic value.
     expect(footer).toContain("  - a Basic value: the base64 holds an email and a password: change that password.\n");
+    // A sign-in replaces the stored session; whether the platform then refuses the committed token is not verified.
     expect(footer).toContain(
-      "  - a session token after user_token or X-Authorization: sign in again (`gripeventsctl auth signin <slug>`), so the stored session is a new one.\n",
+      "  - a session token after user_token or X-Authorization: sign in again (`gripeventsctl auth signin <slug>`) to replace the stored session; the committed token may stay valid until it expires.\n",
     );
     expect(footer).toContain(
       "  - a JWT, such as the chat token; the application token after general.token or a general key: no command of this tool replaces it: rewrite the commit before it is pushed.\n",

@@ -205,8 +205,13 @@ export interface SecretShape {
   readonly remedy: string;
 }
 
-/** The remedy for a session token: a new sign-in stores a new session (`README.md` § Authentication). */
-const NEW_SESSION_REMEDY = "sign in again (`gripeventsctl auth signin <slug>`), so the stored session is a new one";
+/**
+ * The remedy for a session token: a sign-in replaces the stored session with the one it captured (`saveSession` in
+ * `config/store.ts`). Whether the platform then refuses the committed token is not verified: its lifetime is not
+ * known (`docs/api/login.md` § Token lifetime), so the remedy says it may stay valid.
+ */
+const NEW_SESSION_REMEDY =
+  "sign in again (`gripeventsctl auth signin <slug>`) to replace the stored session; the committed token may stay valid until it expires";
 /** The remedy for a Basic value: base64 is an encoding, so the value is the password itself. */
 const PASSWORD_REMEDY = "the base64 holds an email and a password: change that password";
 /** The remedy for a credential no command of the tool replaces: the chat token and the event's own tokens. */
