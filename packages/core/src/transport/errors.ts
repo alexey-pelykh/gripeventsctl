@@ -49,18 +49,27 @@ export function bodyExcerpt(text: string): string {
 
 /**
  * True for a character that can split a line or rewrite one in a terminal or a log reader: a C0 control character
- * (U+0000 to U+001F), DEL (U+007F), a C1 control character (U+0080 to U+009F), and the line and paragraph separators
- * U+2028 and U+2029.
+ * (U+0000 to U+001F), DEL (U+007F), a C1 control character (U+0080 to U+009F), the line and paragraph separators
+ * U+2028 and U+2029, and the direction controls that reorder a line as it is shown, the embeddings and overrides
+ * U+202A to U+202E and the isolates U+2066 to U+2069.
  */
 export function isLineBreakingCode(code: number): boolean {
-  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029;
+  return (
+    code < 0x20 ||
+    (code >= 0x7f && code <= 0x9f) ||
+    code === 0x2028 ||
+    code === 0x2029 ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069)
+  );
 }
 
 /**
  * `text` with every character `isLineBreakingCode` names written as `\uXXXX`: what a message or a hint holds of a text
- * the code does not control (an answer's reason or body, a slug the caller passed), so the text stays on one line
- * wherever the message is printed. Every caller passes a text already redacted: escaped first, a line break after a
- * scheme word is no longer whitespace to the pattern that reads it, and the token after it would stay.
+ * the code does not control (an answer's reason or body, a slug the caller passed), so the text stays on one line, and
+ * shows in the order it was written, wherever the message is printed. Every caller passes a text already redacted:
+ * escaped first, a line break after a scheme word is no longer whitespace to the pattern that reads it, and the token
+ * after it would stay.
  */
 export function escapeLineBreaks(text: string): string {
   let escaped = "";

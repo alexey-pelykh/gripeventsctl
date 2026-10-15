@@ -124,7 +124,7 @@ function holdsControlCharacter(text: string): boolean {
 /**
  * `text` quoted for a message: passed through `redactString` while its whitespace is still whitespace to the patterns,
  * then in JSON string syntax with every character `isLineBreakingCode` names escaped as `\uXXXX`. `JSON.stringify`
- * escapes the C0 range only and leaves DEL, the C1 range and the two separators raw.
+ * escapes the C0 range only and leaves DEL, the C1 range, the two separators and the direction controls raw.
  */
 function quoted(text: string): string {
   return escapeLineBreaks(JSON.stringify(redactString(text)));
@@ -516,9 +516,10 @@ export class GripClient {
   /**
    * The URL of `path` under `BASE_URL`, with `query` appended. Refused before any request: a path that would leave the
    * base, and a path the URL parser would send in another form (a `.` segment, a backslash, a space, a fragment before
-   * or after the query, a control character) or that holds a control character anywhere. So the path the request goes
-   * to is the caller's string, and the rules that key on it (the profile spacing, the gated-type answer) and the
-   * diagnostic line, one line per request, read what is sent.
+   * or after the query, a control character) or that holds, anywhere, a character `isLineBreakingCode` names: a control
+   * character, a line or paragraph separator, or a direction control. So the path the request goes to is the caller's
+   * string, and the rules that key on it (the profile spacing, the gated-type answer) and the diagnostic line, one line
+   * per request, read what is sent.
    */
   #url(path: string, query?: Query): URL {
     const escapes = path.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(path) || path.split(/[/?#]/).includes("..");
@@ -541,7 +542,7 @@ export class GripClient {
       url.pathname !== `${BASE_PATH}${pathPart}`
     ) {
       throw new TypeError(
-        `GripClient: a path is sent as given, so it must be in the form the URL parser sends (no "." segment, backslash, space, fragment, percent-encoding or control character): ${quoted(path)}`,
+        `GripClient: a path is sent as given, so it must be in the form the URL parser sends (no "." segment, backslash, space, fragment, percent-encoding, control character or direction control): ${quoted(path)}`,
       );
     }
     if (query !== undefined) {

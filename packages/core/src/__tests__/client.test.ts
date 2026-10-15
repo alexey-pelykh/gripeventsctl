@@ -176,12 +176,19 @@ function bodyText(body: unknown): string {
 }
 
 /**
- * The codes in `text` of every character that splits a line or rewrites one in a terminal or a log reader: C0, DEL, C1
- * and the two separators U+2028 and U+2029.
+ * The codes in `text` of every character that splits a line or rewrites one in a terminal or a log reader: C0, DEL, C1,
+ * the two separators U+2028 and U+2029, and the direction controls U+202A to U+202E and U+2066 to U+2069, which
+ * reorder a line as it is shown.
  */
 function lineBreaking(text: string): number[] {
   return Array.from(text, (character) => character.charCodeAt(0)).filter(
-    (code) => code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029,
+    (code) =>
+      code < 0x20 ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069),
   );
 }
 
@@ -487,6 +494,9 @@ describe("[CAP-CLIENT] AC-01 the base URL is fixed", () => {
         "container/1\u007f/thing/5",
         "container?search=a\u0085GET container: 200",
         "container?search=a\u2028GET container: 200",
+        // A direction override and an isolate: each reorders the rest of the line as it is shown.
+        "container?search=a\u202eGET container: 200",
+        "container?search=a\u2066GET container: 200",
       ];
       for (const path of forged) {
         const label = JSON.stringify(path).replaceAll("\u007f", "\\u007f");
@@ -1297,10 +1307,10 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
 
   it("escapes every line-breaking character of server text in a message and a hint, while bodyExcerpt keeps the text as sent, redacted and cut", async () => {
     await withSession(async (home) => {
-      // A line feed and an escape (C0), DEL, NEL (C1) and the line separator: each splits a line, or rewrites one, in a
-      // terminal or a log reader.
-      const forged = "first\nGET container: 200\u001b[2K\u007f\u0085\u2028end";
-      const escaped = String.raw`first\u000aGET container: 200\u001b[2K\u007f\u0085\u2028end`;
+      // A line feed and an escape (C0), DEL, NEL (C1), the line separator, a direction override and an isolate: each
+      // splits a line, or rewrites one, in a terminal or a log reader.
+      const forged = "first\nGET container: 200\u001b[2K\u007f\u0085\u2028\u202e\u2067end";
+      const escaped = String.raw`first\u000aGET container: 200\u001b[2K\u007f\u0085\u2028\u202e\u2067end`;
       const client = newClient(home.env);
       const cases: [string, () => Promise<unknown>, string, string, () => GripReply][] = [
         ["a success: false reason", () => client.get("container"), "/1/container", "GET", () => failure(forged, 400)],
@@ -1330,19 +1340,19 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
         expect(lineBreaking(message), `${label}: message`).toEqual([]);
         expect(lineBreaking(hint), `${label}: hint`).toEqual([]);
         // JSON quoting writes the line feed and the escape its own way; every other character is escaped as \uXXXX.
-        expect(message, label).toContain(String.raw`\u007f\u0085\u2028end`);
+        expect(message, label).toContain(String.raw`\u007f\u0085\u2028\u202e\u2067end`);
         if (!label.startsWith("a gated-type")) expect(message, label).toContain(escaped);
         if (bodyExcerpt !== undefined && !label.startsWith("a key")) expect(bodyExcerpt, label).toContain(forged);
       }
 
       // The caller's own slug is escaped the same way where a message or a hint names it, as the caller's path is.
-      const slug = "test\u0085event\u2028x";
+      const slug = "test\u0085event\u2028\u2069x";
       pool()
         .intercept({ path: (requested) => requested.startsWith("/1/config?container_name="), method: "GET" })
         .reply(() => configLookup404());
       const unknown = await caught(client.lookupConfig(slug));
       expect(unknown).toBeInstanceOf(UnknownSlugError);
-      expect((unknown as GripError).message).toBe(String.raw`no container has the slug "test\u0085event\u2028x"`);
+      expect((unknown as GripError).message).toBe(String.raw`no container has the slug "test\u0085event\u2028\u2069x"`);
       pool()
         .intercept({ path: "/1/user/account/login", method: "POST" })
         .reply(() => failure("synthetic unauthorized 3", 401));
@@ -1360,7 +1370,7 @@ describe("[CAP-CLIENT] AC-06 the envelope (docs/api/README.md § Response envelo
       expect((refused as GripError).hint).toBe(
         String.raw`check the email and the password, then run ` +
           "`gripeventsctl auth signin " +
-          String.raw`test\u0085event\u2028x` +
+          String.raw`test\u0085event\u2028\u2069x` +
           "` again",
       );
     });
@@ -3176,16 +3186,17 @@ describe("[CAP-REDACT] AC-15 every error class redacts its inputs, AC-19 every d
   it("escapes every line-breaking character of a transport failure's text in the message and on the diagnostic line, so a failure never splits a line", async () => {
     await withSession(async (home) => {
       // A TLS name mismatch, for one, quotes the names the server's certificate carries.
-      const failure = Object.assign(new Error("altnames: DNS:first\nGET container: 200\u001b[2K\u0085\u2028end"), {
-        code: "ERR_TLS_CERT_ALTNAME_INVALID",
-      });
+      const failure = Object.assign(
+        new Error("altnames: DNS:first\nGET container: 200\u001b[2K\u0085\u2028\u202d\u2068end"),
+        { code: "ERR_TLS_CERT_ALTNAME_INVALID" },
+      );
       pool().intercept({ path: "/1/container", method: "GET" }).replyWithError(failure);
       const stderr = stderrSink();
       const error = await caught(newClient(home.env, { stderr: stderr.stream }).get("container"));
       expect(error).toBeInstanceOf(NetworkError);
       const { message } = error as GripError;
       expect(lineBreaking(message)).toEqual([]);
-      expect(message).toContain(String.raw`DNS:first\u000aGET container: 200\u001b[2K\u0085\u2028end`);
+      expect(message).toContain(String.raw`DNS:first\u000aGET container: 200\u001b[2K\u0085\u2028\u202d\u2068end`);
       // One diagnostic line, ended by its own line feed.
       expect(stderr.text().endsWith("\n")).toBe(true);
       expect(lineBreaking(stderr.text().slice(0, -1))).toEqual([]);
