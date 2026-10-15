@@ -1976,33 +1976,37 @@ describe("[CAP-THROTTLE] the retry after a 429 is the same request (issue #5 § 
         .times(2);
       const client = newClient(home.env, { clock });
       const first = client.get("container");
-      await waitFor(() => clock.waiting() > 0, "the wait after the 429");
-      // A sign-in stored while the wait is pending: another token under a later signed_in_at.
-      const other = fixtureSecrets();
-      await saveSession(
-        { slug: SESSION_SLUG, container_id: 1, token: other.sessionToken },
-        { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
-      );
-      await drain(clock, first);
-      await first;
-      const [sent, retry] = calls();
-      if (sent === undefined || retry === undefined) throw new Error("the first request or its retry is missing");
-      expect(clock.sleeps).toEqual([SCHEDULE_S[0] * 1000]);
-      expect({ method: retry.method, path: retry.fullUrl, body: retry.body }).toEqual({
-        method: sent.method,
-        path: sent.fullUrl,
-        body: sent.body,
-      });
-      expect(lowerHeaders(retry.headers)).toEqual(lowerHeaders(sent.headers));
-      expect(lowerHeaders(retry.headers)["x-authorization"]).toBe(secrets.sessionToken);
+      try {
+        await waitFor(() => clock.waiting() > 0, "the wait after the 429");
+        // A sign-in stored while the wait is pending: another token under a later signed_in_at.
+        const other = fixtureSecrets();
+        await saveSession(
+          { slug: SESSION_SLUG, container_id: 1, token: other.sessionToken },
+          { env: home.env, clock: fakeClock("2026-10-13T08:00:00Z") },
+        );
+        await clock.advance(SCHEDULE_S[0] * 1000);
+        await first;
+        const [sent, retry] = calls();
+        if (sent === undefined || retry === undefined) throw new Error("the first request or its retry is missing");
+        expect(clock.sleeps).toEqual([SCHEDULE_S[0] * 1000]);
+        expect({ method: retry.method, path: retry.fullUrl, body: retry.body }).toEqual({
+          method: sent.method,
+          path: sent.fullUrl,
+          body: sent.body,
+        });
+        expect(lowerHeaders(retry.headers)).toEqual(lowerHeaders(sent.headers));
+        expect(lowerHeaders(retry.headers)["x-authorization"]).toBe(secrets.sessionToken);
 
-      // The stored change is not lost: the next call carries the new sign-in's token.
-      await client.get("container");
-      expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
-        secrets.sessionToken,
-        secrets.sessionToken,
-        other.sessionToken,
-      ]);
+        // The stored change is not lost: the next call carries the new sign-in's token.
+        await client.get("container");
+        expect(calls().map((call) => lowerHeaders(call.headers)["x-authorization"])).toEqual([
+          secrets.sessionToken,
+          secrets.sessionToken,
+          other.sessionToken,
+        ]);
+      } finally {
+        await drain(clock, first);
+      }
     });
   });
 });
