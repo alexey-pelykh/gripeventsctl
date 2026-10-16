@@ -7,6 +7,7 @@ import { fixtureSecrets } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
 import {
+  MIN_REGISTERED_SECRET_LENGTH,
   REDACTED,
   RUNTIME_ONLY_PATTERN_SOURCES,
   SECRET_PATTERN_SOURCES,
@@ -57,9 +58,9 @@ function lintMatches(text: string): string[] {
 
 describe("the login Authorization shape (docs/api/login.md § Request)", () => {
   it("matches the whole `Bearer <x>, Basic <y>` value where no other shape matches a part of it, and redacts both values", () => {
-    // A Bearer value under the 16 characters the bare Bearer shape needs, and a Basic value of letters only, which the
+    // A Bearer value under the 8 characters the bare Bearer shape needs, and a Basic value of letters only, which the
     // standalone Basic shape leaves to prose: only the login shape knows this value.
-    const bearer = randomBytes(6).toString("hex");
+    const bearer = randomBytes(3).toString("hex");
     const basic = Array.from(randomBytes(24), (byte) =>
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".charAt(byte % 52),
     ).join("");
@@ -126,10 +127,43 @@ describe("the 16-character floor of a Basic value (issue #5 § Redaction, amende
     }
   });
 
+  it("redacts a padded value of seventeen characters whole, alone and in the login value", () => {
+    const value = "ABCDEFGHIJKLMNO==";
+    expect(value).toHaveLength(17);
+    expect(lintMatches(`Authorization: Basic ${value}`)).toEqual([`Basic ${value}`]);
+    expect(redactString(`Authorization: Basic ${value}`)).toBe(`Authorization: Basic ${REDACTED}`);
+    const login = `Authorization: Bearer synthetic-application-token-1, Basic ${value}`;
+    expect(redactString(login)).toBe(`Authorization: Bearer ${REDACTED}, Basic ${REDACTED}`);
+  });
+
+  it("applies no floor to the Basic part of the login value: § Redaction states none for `Bearer <x>, Basic <y>`", () => {
+    for (const basic of ["QUJDREVGR0g=", "QUJDRA==", "QUJDREVGR0hJSg", "QUJDREVGR0hJSklM", "QUJDREVGR0hJSklMTU4="]) {
+      const login = `Authorization: Bearer synthetic-application-token-1, Basic ${basic}`;
+      expect(lintMatches(login), basic).toContain(`Bearer synthetic-application-token-1, Basic ${basic}`);
+      expect(redactString(login), basic).toBe(`Authorization: Bearer ${REDACTED}, Basic ${REDACTED}`);
+    }
+  });
+
   it("leaves fifteen characters alone, padded or not, when they hold no digit, `+` or `/`", () => {
     for (const value of ["ABCDEFGHIJKLMNO", "ABCDEFGHIJKLMN="]) {
       expect(lintMatches(`Authorization: Basic ${value}`), value).toEqual([]);
       expect(redactString(`Authorization: Basic ${value}`), value).toBe(`Authorization: Basic ${value}`);
+    }
+  });
+});
+
+describe("the bare Bearer shape (issue #5 § Redaction: any bare `Bearer <token>` value, at run time only)", () => {
+  it("redacts a bare Bearer value of eight characters or more, the floor the module applies to every secret", () => {
+    for (const token of ["abcdefgh", "synthetic-12", "synthetic-token"]) {
+      expect(token.length).toBeGreaterThanOrEqual(MIN_REGISTERED_SECRET_LENGTH);
+      expect(redactString(`Authorization: Bearer ${token}`), token).toBe(`Authorization: Bearer ${REDACTED}`);
+      expect(lintMatches(`Authorization: Bearer ${token}`), token).toEqual([]);
+    }
+  });
+
+  it("leaves a bare Bearer value under eight characters, which prose after the word can be, as it is", () => {
+    for (const line of ["Bearer of the Ring", "the Bearer bonds", "Bearer abcdefg"]) {
+      expect(redactString(line), line).toBe(line);
     }
   });
 });
