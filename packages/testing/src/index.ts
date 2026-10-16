@@ -24,7 +24,7 @@ export {
   fakeTerminal,
 } from "./terminal.js";
 export { type RunCliIo, type RunCliResult, runCli } from "./cli-harness.js";
-export { type CapturedOutput, captureProcessOutput } from "./capture-output.js";
+export { type CapturedOutput, type OutputSink, captureProcessOutput, openOutputCapture } from "./capture-output.js";
 export { MCP_TEST_CLIENT, type McpLink, linkMcp } from "./mcp-harness.js";
 export {
   type SpawnMcpStdioOptions,

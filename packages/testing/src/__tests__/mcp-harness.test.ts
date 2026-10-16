@@ -55,6 +55,18 @@ describe("[CAP-TEST-TOOLING] linkMcp()", () => {
     }
   });
 
+  it("records a handler line once when two calls are in flight together, and nothing after both returned", async () => {
+    const link = await linkMcp(oneToolServer());
+    try {
+      await Promise.all([link.callTool("echo_state"), link.callTool("echo_state")]);
+      expect(link.stderr()).toBe("handler console line\nhandler stderr line\n".repeat(2));
+      console.error("not captured");
+      expect(link.stderr()).toBe("handler console line\nhandler stderr line\n".repeat(2));
+    } finally {
+      await link.close();
+    }
+  });
+
   it("closes both transports: a call after close() rejects", async () => {
     const server = oneToolServer();
     const link = await linkMcp(server);

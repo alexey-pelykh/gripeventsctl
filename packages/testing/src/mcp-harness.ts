@@ -5,8 +5,10 @@
  * `linkMcp(server)`: connect a real `McpServer` to an SDK `Client` over an in-memory transport pair
  * (`InMemoryTransport.createLinkedPair()`), so a test drives the server through the protocol it
  * speaks to an assistant: `tools/list` and `tools/call`, with the raw `CallToolResult` read back.
- * What a handler writes to `process.stderr` or `console.error` during a call is captured and read
- * through `stderr()`; a write made after the call returned is not covered.
+ * What a handler writes to `process.stderr` or `console.error` while a call is in flight is captured
+ * and read through `stderr()`; the link holds one capture open while any of its calls is in flight,
+ * so two calls issued together share it and a line is recorded once. A write made after the last
+ * call returned is not covered.
  */
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -14,7 +16,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type CallToolResult, ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { captureProcessOutput } from "./capture-output.js";
+import { openOutputCapture } from "./capture-output.js";
 
 export interface McpLink {
   client: Client;
@@ -55,11 +57,29 @@ export async function linkMcp(server: McpServer): Promise<McpLink> {
   const client = new Client(MCP_TEST_CLIENT);
   let stderr = "";
   let stdout = "";
+  let inFlight = 0;
+  let close: (() => void) | undefined;
   const captured = async <T>(fn: () => Promise<T>): Promise<T> => {
-    const run = await captureProcessOutput(fn);
-    stderr += run.stderr;
-    stdout += run.stdout;
-    return run.result;
+    if (inFlight === 0) {
+      close = openOutputCapture({
+        stdout: (text) => {
+          stdout += text;
+        },
+        stderr: (text) => {
+          stderr += text;
+        },
+      });
+    }
+    inFlight += 1;
+    try {
+      return await fn();
+    } finally {
+      inFlight -= 1;
+      if (inFlight === 0) {
+        close?.();
+        close = undefined;
+      }
+    }
   };
 
   await server.connect(serverTransport);

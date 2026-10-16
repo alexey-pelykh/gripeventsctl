@@ -6,6 +6,7 @@
  * before the tests through Turborepo) in a temporary home holding no config.
  */
 
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,15 +37,16 @@ async function waitForLine(read: () => string, timeoutMs = 5000): Promise<string
 
 describe("[CAP-TEST-TOOLING] spawnMcpStdio()", () => {
   it("resolves the repository root and the umbrella binary from the harness file", () => {
-    expect(repositoryRoot().endsWith("gripeventsctl") || repositoryRoot().length > 0).toBe(true);
+    expect(existsSync(join(repositoryRoot(), "pnpm-workspace.yaml"))).toBe(true);
     expect(umbrellaBinary()).toBe(join(repositoryRoot(), "packages", "gripeventsctl", "dist", "cli.js"));
+    expect(existsSync(umbrellaBinary())).toBe(true);
   });
 
   it("completes the handshake, lists the tools, reads the start line from stderr and nothing from stdout", async () => {
     const link = await spawnMcpStdio({ home });
     try {
-      const tools = await link.listTools();
-      expect(Array.isArray(tools)).toBe(true);
+      // The umbrella registers no tool yet; the registry item fills this list.
+      expect(await link.listTools()).toEqual([]);
       const stderr = await waitForLine(() => link.stderr());
       expect(stderr.split(/\r?\n/).filter((line) => line !== "")).toEqual([
         `gripeventsctl mcp: config ${join(home, ".gripeventsctl.yaml")}, no config`,
@@ -62,21 +64,19 @@ describe("[CAP-TEST-TOOLING] spawnMcpStdio()", () => {
     await expect(spawnMcpStdio({ home, entry: join(home, "missing.js") })).rejects.toThrow(/pnpm build/u);
   });
 
-  it("reduces the child's environment to PATH, the home variables and the given extras", () => {
+  it("sets PATH, the home variables and the given extras on the child, and nothing else of its own", () => {
     const env = childEnvironment({ home, env: { GRIPEVENTSCTL_E2E: "0" } });
     expect(env["HOME"]).toBe(home);
     expect(env["USERPROFILE"]).toBe(home);
     expect(env["GRIPEVENTSCTL_CONFIG_FILE"]).toBe(join(home, ".gripeventsctl.yaml"));
     expect(env["GRIPEVENTSCTL_E2E"]).toBe("0");
     expect(env["PATH"]).toBe(process.env["PATH"]);
-    if (process.platform !== "win32") {
-      expect(Object.keys(env).sort()).toEqual([
-        "GRIPEVENTSCTL_CONFIG_FILE",
-        "GRIPEVENTSCTL_E2E",
-        "HOME",
-        "PATH",
-        "USERPROFILE",
-      ]);
-    }
+    expect(Object.keys(env).sort()).toEqual([
+      "GRIPEVENTSCTL_CONFIG_FILE",
+      "GRIPEVENTSCTL_E2E",
+      "HOME",
+      "PATH",
+      "USERPROFILE",
+    ]);
   });
 });
