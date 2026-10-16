@@ -5,9 +5,7 @@ packages/core/src/__tests__/export-file.oracle.test.ts
 packages/core/src/__tests__/gate.oracle.test.ts
 packages/core/src/__tests__/go-ahead.oracle.test.ts
 packages/gripeventsctl/src/__tests__/attendees-dump.oracle.test.ts
-packages/gripeventsctl/src/__tests__/output-backstop.oracle.test.ts
 packages/gripeventsctl/src/__tests__/write-paths-process.oracle.test.ts
 packages/gripeventsctl/src/__tests__/write-paths.oracle.test.ts
 packages/gripeventsctl/src/__tests__/writes-bodies.oracle.test.ts
 packages/gripeventsctl/src/__tests__/writes.oracle.test.ts
-packages/mcp/src/__tests__/pacing-mcp.oracle.test.ts
