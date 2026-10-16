@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildProgram, buildServer } from "../index.js";
 
-describe("umbrella", () => {
+describe("[CAP-PARITY] umbrella", () => {
   it("re-exports the CLI program and the MCP server builders", () => {
     expect(buildProgram().name()).toBe("gripeventsctl");
     expect(buildServer()).toBeDefined();

@@ -11,7 +11,7 @@
   "scripts": {
     "clean": "turbo run clean",
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "turbo run test && pnpm test:scripts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "turbo run test:e2e --concurrency=1",
     "test:oracles": "vitest run --config vitest.oracles.config.ts",
@@ -19,12 +19,13 @@
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "typecheck": "turbo run typecheck",
-    "lint": "pnpm format:check && turbo run lint && pnpm lint:root && pnpm check-secret-leakage && pnpm check-dep-confusion",
+    "lint": "pnpm format:check && turbo run lint && pnpm lint:root && pnpm check-secret-leakage && pnpm check-dep-confusion && pnpm check-test-traceability",
     "lint:root": "eslint eslint.config.js vitest.config.ts vitest.e2e.config.ts vitest.oracles.config.ts scripts/",
     "license-check": "node scripts/check-licenses.js",
     "check-secret-leakage": "tsx scripts/check-secret-leakage.ts",
     "check-dep-confusion": "tsx scripts/check-dep-confusion.ts",
     "check-oracles": "tsx scripts/check-oracles.ts",
+    "check-test-traceability": "tsx scripts/check-test-traceability.ts",
     "dev": "turbo run dev"
   },
   "devDependencies": {
@@ -38,6 +39,7 @@
     "turbo": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "yaml": "catalog:"
   }
 }

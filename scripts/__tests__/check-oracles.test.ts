@@ -85,7 +85,7 @@ function failures(grades: FileGrade[]): FileGrade[] {
   return grades.filter((g) => !g.ok);
 }
 
-describe("parseLedger", () => {
+describe("[CAP-TEST-TOOLING] parseLedger", () => {
   it("drops comments and blank lines, trims paths and removes duplicates", () => {
     const text = `# Oracle files whose subjects are not built yet.\n\n  ${FILE_A}  \n${FILE_B}\n${FILE_A}\n`;
     expect(parseLedger(text)).toEqual([FILE_A, FILE_B]);

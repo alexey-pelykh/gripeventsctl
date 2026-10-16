@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { fakeTerminal } from "../terminal.js";
 
-describe("fakeTerminal", () => {
+describe("[CAP-TEST-TOOLING] fakeTerminal", () => {
   it("reports the TTY flags it was given, defaulting to no terminal", () => {
     expect(fakeTerminal().terminal.isStdinTTY()).toBe(false);
     expect(fakeTerminal().terminal.isStdoutTTY()).toBe(false);
