@@ -110,13 +110,17 @@ export function conflictDetails(body: unknown): string[] | undefined {
 }
 
 /**
- * The config lookup's `data` (`docs/api/containers.md` § Fields of a 200 answer): the display name,
- * the container name, the active flag (`1` live, `0` ended), the application name, id and
- * per-event token, and the type permissions kept as sent. `permissions` may be absent without an
- * error (issue #5 § The envelope and the classification, response validation): the answer for an
- * ended edition omits the block, in a live run of 2026-10-13 recorded by #6. `default_container_id`
- * names the application's default event, not the looked-up container, and is not typed; which field
- * holds the container's own id is not verified.
+ * The config lookup's `data` (`docs/api/containers.md` § Fields of a 200 answer): the container id,
+ * the display name, the container name, the active flag (`1` live, `0` ended), the application
+ * name, id and per-event token, and the type permissions kept as sent. `permissions` may be absent
+ * without an error (issue #5 § The envelope and the classification, response validation): the answer
+ * for an ended edition omits the block, in a live run of 2026-10-13 recorded by #6.
+ * `container.general.container_id` is the field the sign-in command reads the container id from
+ * (issue #6): a live run of 2026-10-13 recorded it for the live edition and absent for the ended
+ * one, so it is optional, and whether it holds the looked-up container's own id rather than the
+ * application's default is not verified (`docs/api/not-verified.md` § Containers).
+ * `default_container_id` names the application's default event, not the looked-up container, and
+ * is not typed.
  *
  * The JSON types come from the page's own literals (`1` / `0` for `active`, "numeric id, for
  * example `165`" for `application_id`, a display name that may be empty); the page's § Example
@@ -127,7 +131,12 @@ export function conflictDetails(body: unknown): string[] | undefined {
  */
 export const configLookupSchema = z.object({
   container: z.object({
-    general: z.object({ display_name: z.string(), name: z.string(), active: z.number() }),
+    general: z.object({
+      container_id: z.number().int().positive().optional(),
+      display_name: z.string(),
+      name: z.string(),
+      active: z.number(),
+    }),
   }),
   application: z.object({
     general: z.object({ application_name: z.string(), application_id: z.number(), token: z.string() }),

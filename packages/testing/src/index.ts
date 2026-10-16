@@ -15,4 +15,12 @@ export {
   withTempHome,
 } from "./temp-home.js";
 export { MOCK_API_ORIGIN, type MockGripHooks, type StderrSink, gripPool, mockGrip, stderrSink } from "./mock-grip.js";
+export {
+  type FakeTerminal,
+  type FakeTerminalOptions,
+  type OutputStream,
+  type Terminal,
+  fakeTerminal,
+} from "./terminal.js";
+export { type RunCliIo, type RunCliResult, runCli } from "./cli-harness.js";
 export * from "./envelopes/index.js";
