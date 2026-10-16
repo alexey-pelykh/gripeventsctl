@@ -46,6 +46,7 @@
     "vitest": "catalog:"
   },
   "dependencies": {
+    "@gripeventsctl/cli": "workspace:^",
     "@gripeventsctl/core": "workspace:^",
     "@modelcontextprotocol/sdk": "catalog:",
     "zod": "catalog:"

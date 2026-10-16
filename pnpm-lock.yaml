@@ -407,6 +407,9 @@ importers:
 
   packages/mcp:
     dependencies:
+      '@gripeventsctl/cli':
+        specifier: workspace:^
+        version: link:../cli
       '@gripeventsctl/core':
         specifier: workspace:^
         version: link:../core

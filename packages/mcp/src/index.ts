@@ -1,18 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Oleksii PELYKH
 
-import { type LoadResult, configPath, loadConfig, redactString } from "@gripeventsctl/core";
+import { type LoadResult, OPERATIONS, configPath, loadConfig, redactString } from "@gripeventsctl/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
+import { type ServerDeps, toolDeps } from "./lib/context.js";
+import { toolFromOperation } from "./lib/tool-from-operation.js";
+
 export const SERVER_NAME = "gripeventsctl";
 
+export { type ServerDeps, type ToolDeps } from "./lib/context.js";
+export { type ErrorReport, errorResult } from "./lib/error-result.js";
+export { toolFromOperation } from "./lib/tool-from-operation.js";
+
 /**
- * Build the MCP server. Tools register here as they land, each one the twin of a CLI command
- * (see `.mcp-exempt.yaml` at the repository root for the declared exceptions).
+ * Build the MCP server: one tool per entry of `deps.operations` (the registry `OPERATIONS` by default), each the
+ * twin of a CLI leaf command (see `.mcp-exempt.yaml` at the repository root for the declared exceptions), over the
+ * environment, clock, dispatcher and stderr `deps` names, the process's own by default. Never a tool whose name
+ * starts with `gripeventsctl_auth_`: the server consumes the stored session and never signs in.
  */
-export function buildServer(version = "0.0.0"): McpServer {
-  return new McpServer({ name: SERVER_NAME, version });
+export function buildServer(version = "0.0.0", deps: ServerDeps = {}): McpServer {
+  const server = new McpServer({ name: SERVER_NAME, version });
+  const shared = toolDeps(deps);
+  for (const op of deps.operations ?? OPERATIONS) toolFromOperation(server, op, shared);
+  return server;
 }
 
 /** What the start line reports: the loaded config, or the error loading it raised. */
@@ -59,6 +71,6 @@ export interface RunOptions {
 export async function runMcpStdio(version?: string, options: RunOptions = {}): Promise<void> {
   const stderr = options.stderr ?? process.stderr;
   stderr.write(`${redactString(await describeStart(options.env))}\n`);
-  const server = buildServer(version);
+  const server = buildServer(version, { ...(options.env === undefined ? {} : { env: options.env }), stderr });
   await server.connect(new StdioServerTransport());
 }
