@@ -119,4 +119,23 @@ describe("[CAP-AUTH] the exit-code table and the error printer", () => {
     expect(unknownOption.exitCode).toBe(2);
     expect(unknownOption.stderr).toContain("unknown option");
   });
+
+  it("a value typed in the wrong place, an extra positional or an unknown command, is never echoed by a usage error", async () => {
+    const { password } = fixtureSecrets();
+    const io = { terminal: fakeTerminal().terminal, dispatcher: undefined, clock: fakeClock(), env: process.env };
+    const extraPositional = await runCli(["auth", "signin", "test-event-1", password], io);
+    expect(extraPositional.exitCode).toBe(2);
+    expect(extraPositional.stderr).toContain("too many arguments for 'signin'. Expected 1 argument but got 2.");
+    expect(extraPositional.stderr).not.toContain(password);
+    expect(extraPositional.stderr).not.toContain("test-event-1");
+
+    const unknownCommand = await runCli([password], io);
+    expect(unknownCommand.exitCode).toBe(2);
+    expect(unknownCommand.stderr).toContain("error: unknown command\n");
+    expect(unknownCommand.stderr).not.toContain(password);
+
+    const unknownVerb = await runCli(["auth", password], io);
+    expect(unknownVerb.exitCode).toBe(2);
+    expect(unknownVerb.stderr).not.toContain(password);
+  });
 });

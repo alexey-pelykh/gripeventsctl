@@ -44,7 +44,8 @@ const positiveInteger = z.coerce.number().int().positive();
 export function parseContainerId(value: string): number {
   const parsed = positiveInteger.safeParse(value.trim() === "" ? Number.NaN : value);
   if (!parsed.success) {
-    throw new UsageError(`--container-id must be a positive integer, not ${JSON.stringify(value)}`);
+    // The value is not echoed: a usage error never prints what the user typed in the wrong place.
+    throw new UsageError("--container-id must be a positive integer");
   }
   return parsed.data;
 }

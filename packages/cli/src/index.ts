@@ -17,6 +17,19 @@ export { type CliOptions } from "./lib/context.js";
 export { EXIT_CODES, type ErrorReport, describeError, exitCodeOf } from "./lib/exit-codes.js";
 export { type OutputStream, type Terminal, realTerminal } from "./lib/terminal.js";
 
+/**
+ * Commander's usage-error text with every user-typed positional value removed. Commander echoes the
+ * excess positionals of `too many arguments` and the name of an `unknown command`; a value a user
+ * typed in the wrong place may be a password, which must reach no stream (issue #7 § Specification,
+ * step 4). The option name of `unknown option` is kept: an option name is not a value. The help
+ * printed after the error still shows the command's own arguments.
+ */
+export function scrubUsageError(text: string): string {
+  return text
+    .replace(/^(error: too many arguments(?: for '.*?')?\. Expected \d+ arguments? but got \d+): [\s\S]*$/, "$1.\n")
+    .replace(/^error: unknown command '.*'/m, "error: unknown command");
+}
+
 /** What `--help` on every level says: the verbs of a group, one per line, under a description that keeps "Unofficial". */
 const PROGRAM_DESCRIPTION =
   "Unofficial CLI for Grip-hosted event apps: attendee directory, profiles, interest swipes, chat and meetings";
@@ -27,8 +40,9 @@ const PROGRAM_DESCRIPTION =
  * umbrella package handles `gripeventsctl mcp` before this program sees argv.
  *
  * Output goes through the context's terminal: human output on stdout, errors and diagnostics on
- * stderr, Commander's own output included, every stderr text through `redactString`. Commander never
- * calls `process.exit`: `runProgram` turns its errors into the exit code.
+ * stderr, Commander's own output included, every stderr text through `redactString` and every
+ * Commander usage error through `scrubUsageError`. Commander never calls `process.exit`:
+ * `runProgram` turns its errors into the exit code.
  */
 export function buildProgram(options: CliOptions = {}): Command {
   return programFor(createContext(options));
@@ -49,6 +63,9 @@ function programFor(context: CliContext): Command {
       },
       writeErr: (text) => {
         context.terminal.write(context.stderr, redactString(text));
+      },
+      outputError: (text, write) => {
+        write(scrubUsageError(text));
       },
     });
   registerAuth(program, context);

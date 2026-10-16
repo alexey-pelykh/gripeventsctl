@@ -8,7 +8,7 @@
  * captured streams and fakes.
  */
 
-import { type Clock, type LoadResult, systemClock, workTreeWarnings } from "@gripeventsctl/core";
+import { type Clock, type LoadResult, redactString, systemClock, workTreeWarnings } from "@gripeventsctl/core";
 import type { Dispatcher } from "undici";
 
 import { type Terminal, realTerminal } from "./terminal.js";
@@ -51,14 +51,14 @@ export function createContext(options: CliOptions = {}): CliContext {
   };
 }
 
-/** One line of human output on stdout. */
+/** One line of human output on stdout, through `redactString`: a backstop, no line is built from a secret. */
 export function writeOut(context: CliContext, line: string): void {
-  context.terminal.write(context.stdout, `${line}\n`);
+  context.terminal.write(context.stdout, `${redactString(line)}\n`);
 }
 
-/** One line of diagnostics on stderr. */
+/** One line of diagnostics on stderr, through `redactString` (CLAUDE.md: every log path passes through it). */
 export function writeErr(context: CliContext, line: string): void {
-  context.terminal.write(context.stderr, `${line}\n`);
+  context.terminal.write(context.stderr, `${redactString(line)}\n`);
 }
 
 /** One JSON document on stdout: the `--json` form of a result. */
