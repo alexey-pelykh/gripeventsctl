@@ -225,7 +225,7 @@ describe("[CAP-AUTH] auth signin", () => {
     expect(await configText()).toContain("container_id: 9840");
   });
 
-  it("S10: a --container-id that is not a positive integer is a usage error, exit 2, before any request", async () => {
+  it("S10: a --container-id that is not a positive integer is a usage error, exit 2, with no login request", async () => {
     const terminal = fakeTerminal({ tty: true, hiddenAnswers: [secrets.password] });
     interceptLookup({ containerId: 3 });
     const loginsBefore = loginCalls();
