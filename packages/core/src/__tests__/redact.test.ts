@@ -105,6 +105,35 @@ describe("the standalone Basic shape (docs/api/login.md § Request)", () => {
   });
 });
 
+describe("the 16-character floor of a Basic value (issue #5 § Redaction, amended 2026-10-15)", () => {
+  // "16 or more base64 characters that include at least one digit, `+`, `/` or `=`": the padding counts among the
+  // sixteen, so a value of 15 letters and `=` (10 bytes) or 14 letters and `==` (10 bytes) is a credential, while
+  // 15 letters alone are prose.
+  const padded = ["ABCDEFGHIJKLMNO=", "ABCDEFGHIJKLMN=="];
+
+  it("matches and redacts a value whose padding brings it to sixteen, alone and in the login value", () => {
+    for (const value of padded) {
+      expect(value).toHaveLength(16);
+      expect(lintMatches(`Authorization: Basic ${value}`), value).toEqual([`Basic ${value}`]);
+      expect(redactString(`Authorization: Basic ${value}`), value).toBe(`Authorization: Basic ${REDACTED}`);
+      const login = `Authorization: Bearer synthetic-application-token-1, Basic ${value}`;
+      // The login shape and the standalone shape both find it, as they both find any value with a digit.
+      expect(lintMatches(login), value).toEqual([
+        `Bearer synthetic-application-token-1, Basic ${value}`,
+        `Basic ${value}`,
+      ]);
+      expect(redactString(login), value).toBe(`Authorization: Bearer ${REDACTED}, Basic ${REDACTED}`);
+    }
+  });
+
+  it("leaves fifteen characters alone, padded or not, when they hold no digit, `+` or `/`", () => {
+    for (const value of ["ABCDEFGHIJKLMNO", "ABCDEFGHIJKLMN="]) {
+      expect(lintMatches(`Authorization: Basic ${value}`), value).toEqual([]);
+      expect(redactString(`Authorization: Basic ${value}`), value).toBe(`Authorization: Basic ${value}`);
+    }
+  });
+});
+
 describe("the grip_cdp_token shape (issue #5 § Redaction: the JSON key-value form under data.application.general)", () => {
   it("matches and redacts the quoted key-value form, keeping the key and the quotes", () => {
     const value = randomBytes(24).toString("base64url");
