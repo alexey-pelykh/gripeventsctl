@@ -8,10 +8,11 @@
  * the harness rejects: that is the point of this harness. The child's stderr is collected and read
  * through `stderr()`; stderr is a separate pipe, so a test that reads the start line waits for it.
  *
- * The child's environment is reduced to `PATH`, `HOME`, `USERPROFILE` and `GRIPEVENTSCTL_CONFIG_FILE`
- * pointing at `opts.home`, plus `opts.env`. On Windows the SDK's default set (`SYSTEMROOT`, `TEMP`
- * and the other variables a Node process needs to start) is kept underneath, because a child with
- * `PATH` alone does not start there.
+ * The harness sets `PATH`, `HOME`, `USERPROFILE` and `GRIPEVENTSCTL_CONFIG_FILE` pointing at
+ * `opts.home`, plus `opts.env`. `StdioClientTransport` (SDK 1.32.1, `client/stdio.js`) merges its
+ * default inherited set underneath on every platform (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM` and
+ * `USER` on POSIX; the variables a process needs to start on Windows), with the harness's values on
+ * top, so the child sees no other variable of the test process and never the real home.
  */
 
 import { existsSync } from "node:fs";
@@ -20,7 +21,7 @@ import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { type CallToolResult, ErrorCode, McpError, type Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { CONFIG_FILE_NAME } from "./guarded-paths.js";
@@ -63,9 +64,9 @@ export function umbrellaBinary(): string {
   return join(repositoryRoot(), "packages", "gripeventsctl", "dist", "cli.js");
 }
 
-/** The environment the child is started with (see the module comment). */
+/** The variables the harness sets on the child; the transport adds its default inherited set underneath. */
 export function childEnvironment(opts: SpawnMcpStdioOptions): Record<string, string> {
-  const base: Record<string, string> = process.platform === "win32" ? getDefaultEnvironment() : {};
+  const base: Record<string, string> = {};
   const path = process.env["PATH"];
   if (path !== undefined) base["PATH"] = path;
   base["HOME"] = opts.home;

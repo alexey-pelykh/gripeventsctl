@@ -55,6 +55,44 @@ describe("[CAP-TEST-TOOLING] captureProcessOutput()", () => {
     expect(outer).toEqual({ stdout: "", stderr: "" });
   });
 
+  it("renders console arguments as the console would: an object, an error and a format string keep their text", async () => {
+    const captured = await captureProcessOutput(() => {
+      console.error({ token: "synthetic-value-1" });
+      console.warn(new Error("boom"));
+      console.log("%s=%d", "count", 3);
+      return Promise.resolve();
+    });
+    expect(captured.stderr).toContain("token: 'synthetic-value-1'");
+    expect(captured.stderr).toContain("Error: boom");
+    expect(captured.stderr).toContain("    at ");
+    expect(captured.stdout).toBe("count=3\n");
+  });
+
+  it("feeds every open capture while two overlap, and restores the streams once the last one closes", async () => {
+    const write = process.stdout.write;
+    const error = console.error;
+    let releaseFirst: () => void = () => undefined;
+    const first = captureProcessOutput(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    const second = captureProcessOutput(async () => {
+      process.stdout.write("while both are open\n");
+      releaseFirst();
+      await first;
+      console.error("after the first closed");
+    });
+    const [one, two] = await Promise.all([first, second]);
+    expect(one.stdout).toBe("while both are open\n");
+    expect(one.stderr).toBe("");
+    expect(two.stdout).toBe("while both are open\n");
+    expect(two.stderr).toBe("after the first closed\n");
+    expect(process.stdout.write).toBe(write);
+    expect(console.error).toBe(error);
+  });
+
   it("restores the streams and the console after the call, including when it rejects", async () => {
     const write = process.stdout.write;
     const error = console.error;
