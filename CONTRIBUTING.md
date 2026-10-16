@@ -46,7 +46,7 @@ pnpm build
 
 ```sh
 pnpm build            # Build all packages (via Turbo)
-pnpm test             # Run unit tests
+pnpm test             # Run unit tests, then the script self-tests under scripts/__tests__/
 pnpm test:coverage    # Run unit tests with coverage
 pnpm test:e2e         # Run E2E tests (sequential, needs a live event app session)
 pnpm typecheck        # Type check all packages
@@ -58,6 +58,19 @@ pnpm dev              # Watch mode
 
 `pnpm lint` is the pre-push gate. Run `pnpm format` to fix any Prettier
 issue, then run `pnpm lint` again.
+
+### Capability tags
+
+Every test file's first top-level `describe` title starts with one or more capability tags in
+square brackets, such as `[CAP-GATE] no write request leaves the process ...`, naming rows of
+[`test-capabilities.yaml`](test-capabilities.yaml) at the repository root. `pnpm check-test-traceability`,
+the last step of `pnpm lint`, fails on a test file without a tag, a tag the catalog does not hold, an
+`active` capability with no tagged file at a level it declares, and a `planned` capability that has a
+tagged file: the pull request that lands a capability's first tagged test flips its row to `active`.
+A file under `packages/e2e/src/` ending in `.e2e.test.ts` counts for the live level, a file under
+`scripts/__tests__/` for the repository-gate level, and every other test file for the unit, component,
+surface and process levels alike. The check prints one report line per capability and lists the
+`*.oracle.test.ts` files that differ from the base branch.
 
 ### Oracle tests
 
