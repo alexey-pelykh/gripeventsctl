@@ -143,8 +143,12 @@ export const JWT_PATTERN_SOURCE =
 /** One character of a token value: no whitespace, no quote, no comma, no brace, and none of `$`, `<`. */
 const TOKEN_CHARACTER_SOURCE = String.raw`[^\s"',$<{}]`;
 
-/** A base64 value of at least 16 characters, with optional padding. */
-const BASE64_VALUE_SOURCE = `${atLeast("[A-Za-z0-9+/]", 16)}={0,2}`;
+/**
+ * A base64 value of at least 16 characters, the `=` padding counted among them (issue #5 § Redaction, amended
+ * 2026-10-15): a run of 16 or more with optional padding, or 15 and `=`, or 14 and `==`. Each alternative is linear.
+ */
+const BASE64_VALUE_SOURCE =
+  `(?:${atLeast("[A-Za-z0-9+/]", 16)}={0,2}` + String.raw`|[A-Za-z0-9+/]{15}=|[A-Za-z0-9+/]{14}==)`;
 
 /**
  * The login `Authorization` value: `Bearer <token>, Basic <base64>`. Groups: scheme, token, separator with scheme,
