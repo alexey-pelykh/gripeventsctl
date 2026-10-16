@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { buildServer, describeStart, startLine } from "../index.js";
 
-describe("buildServer", () => {
+describe("[CAP-PARITY] buildServer", () => {
   it("returns an MCP server", () => {
     expect(buildServer("1.2.3")).toBeInstanceOf(McpServer);
   });

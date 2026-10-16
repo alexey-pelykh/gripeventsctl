@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { MOCK_API_ORIGIN, type MockGripHooks, gripPool, mockGrip } from "../mock-grip.js";
 
-describe("mockGrip()", () => {
+describe("[CAP-TEST-TOOLING] mockGrip()", () => {
   it("registers an after-each check that throws while a declared interceptor was never reached, and passes once it was", async () => {
     let afterEachCheck: (() => void) | undefined;
     let afterAllClose: (() => Promise<void>) | undefined;

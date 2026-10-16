@@ -1,0 +1,108 @@
+# Capabilities the test suite must cover. Consumed by scripts/check-test-traceability.ts.
+# Every test file's first describe title starts with one or more [CAP-<NAME>] tags.
+# levels: U unit, C component, S surface, P process, R repository gate, L live, M manual (never checked).
+# status: planned until the first tagged test lands, then active. A manual-only row ([M]) is never
+# flipped by a test file; it is satisfied by `recorded:`, the pull request or issue comment where the
+# manual runs are recorded.
+capabilities:
+  - id: CAP-CFG
+    description: The config resolves only from the home path or the variable, keeps one versioned session, is created and kept at 0600, and resolves op:// safely
+    levels: [U, C]
+    status: active
+  - id: CAP-CLIENT
+    description: The client sends only documented shapes to the fixed origin, attaches Basic only to login, classifies every documented answer, refuses redirects, bounds requests, and keeps request data out of errors
+    # R is declared again by the item that adds the client's repository-gate test (none exists yet).
+    levels: [U, C]
+    status: active
+  - id: CAP-THROTTLE
+    description: HTTP 429 is waited out on the backoff schedule and retried unchanged, the schedule ends, and nothing rotates
+    levels: [U, C, M]
+    status: active
+  - id: CAP-REDACT
+    description: Every secret shape and every live secret value is redacted on every path; the leakage lint finds none in the tree or history
+    levels: [U, C, R]
+    status: active
+  - id: CAP-AUTH
+    description: Sign-in, sign-out and status run in a terminal only, never leak the password, and store the token safely
+    levels: [S]
+    status: active
+  - id: CAP-PARITY
+    description: Every CLI leaf has its MCP twin and the reverse, exemptions are fresh and reasoned, the server never signs in, and the stdio server lists the v1 tools
+    levels: [U, S, P]
+    status: active
+  - id: CAP-OUTPUT
+    description: Output is an explicit projection, redacted at the last step, mapped to the documented exit codes and error results, and honest about empty states
+    levels: [U, S]
+    status: active
+  - id: CAP-TERMINAL-ESCAPING
+    description: Attendee-written text never reaches a terminal raw
+    levels: [U, S]
+    status: active
+  - id: CAP-EVENTS
+    description: events check and events list work as documented and never show the application token
+    levels: [S]
+    status: planned
+  - id: CAP-ATTENDEES
+    description: List, dump and get send the documented shapes, report gated sets, stop correctly, and never cache
+    levels: [S]
+    status: planned
+  - id: CAP-PACING
+    description: One request in flight per process, 1.5 s between pages, at least 1 s between profile reads, pages in order
+    levels: [C, S]
+    status: active
+  - id: CAP-EXPORT-FILE
+    description: The dump file is created only where asked, exclusively, at 0600, never over or through another file
+    levels: [C, S]
+    status: active
+  - id: CAP-MATCH-READ
+    description: match status reads the documented path without side effects
+    levels: [S]
+    status: planned
+  - id: CAP-CHAT-READ
+    description: chat list and chat thread read the documented paths with no side effect
+    levels: [S]
+    status: planned
+  - id: CAP-SCHEDULE
+    description: schedule info reads the documented path and passes unlisted values through
+    levels: [S]
+    status: planned
+  - id: CAP-GATE
+    description: No write request leaves the process unless writes are enabled, the repeat guard is clear and a needed go-ahead is recorded, on both paths, with one critical section per write
+    levels: [U, C, S, P, M]
+    status: active
+  - id: CAP-GOAHEAD
+    description: A go-ahead is an act only a terminal user performs, matches one exact write, expires, and is consumed before the POST
+    levels: [U, C, S, P]
+    status: active
+  - id: CAP-SENDLOG
+    description: One append-only, 0600, no-follow line per attempt with the documented fields, minimal and intact
+    levels: [U, C, P]
+    status: planned
+  - id: CAP-WRITES
+    description: The three writes read the status first, post only to has_match_none, enforce the message policy, send the documented bodies, and stop at the swipe cap
+    levels: [S]
+    status: active
+  - id: CAP-E2E
+    description: The live suite, on the user's own session, verifies every read shape and the one guarded write, reports cardinality, and CI never holds a session
+    levels: [U, R, L]
+    status: planned
+  - id: CAP-RELEASE
+    description: The release path publishes with provenance through least-privilege, pinned, checksum-verified steps; the ignore rules cover every local file; the matrix and floor hold
+    levels: [R, M]
+    status: planned
+  - id: CAP-DOCS
+    description: Every in-scope docs/api page carries a dated live label, and every operation's page anchor exists
+    levels: [R, M]
+    status: planned
+  - id: CAP-POSTURE
+    description: The disclaimer, the legitimacy page, the MCP warning and the trademark checklist ship as decided
+    levels: [R, M]
+    status: planned
+  - id: CAP-ASSUMPTION-SPIKES
+    description: Every platform assumption time-boxed to one call has a recorded run before its tool ships
+    levels: [M]
+    status: planned
+  - id: CAP-TEST-TOOLING
+    description: The shared test helpers (the harnesses, the mock Grip and its envelope builders, the temporary-home guard) and the repository gate scripts behave as their own tests state
+    levels: [C, R]
+    status: active

@@ -21,7 +21,7 @@ import { BODY_CAP_BYTES } from "../transport/client.js";
 const UUID = "0f1e2d3c-4b5a-4968-8777-66554433aabb";
 const JWT = `eyJ${"a".repeat(20)}.${"b".repeat(40)}.${"c".repeat(30)}`;
 
-describe("redactString", () => {
+describe("[CAP-REDACT] redactString", () => {
   it("redacts a session token after the X-Authorization header name, keeping the name", () => {
     expect(redactString(`X-Authorization: ${UUID}`)).toBe(`X-Authorization: ${REDACTED}`);
     expect(redactString(`x-authorization=${UUID}`)).toBe(`x-authorization=${REDACTED}`);

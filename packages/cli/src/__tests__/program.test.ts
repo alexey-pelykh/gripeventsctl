@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { PROGRAM_NAME, buildProgram } from "../index.js";
 
-describe("buildProgram", () => {
+describe("[CAP-OUTPUT] buildProgram", () => {
   it("names the program after the binary", () => {
     expect(buildProgram().name()).toBe(PROGRAM_NAME);
   });

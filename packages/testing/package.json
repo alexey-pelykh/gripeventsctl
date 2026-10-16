@@ -28,6 +28,7 @@
     "dev": "tsc --watch"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "catalog:",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
