@@ -24,12 +24,14 @@ export interface ConfigLookupOptions {
   applicationToken: string;
   /**
    * The `grip_cdp_token` beside the application token, where given: a further credential under `application.general`,
-   * recorded by a live run of 2026-10-13 (issue #5 § Redaction, through #6) and never typed by the client. A per-run
+   * recorded by a live run of 2026-10-13 (issue #5, its Redaction section, through #6) and never typed by the client. A per-run
    * synthetic value, never a real one.
    */
   gripCdpToken?: string;
-  /** Kept as sent; `{}` by default. */
+  /** Kept as sent; `{}` by default. The page records no key of `type_permissions`. */
   typePermissions?: unknown;
+  /** Further keys merged into `data`, for tests of unknown-field handling. */
+  extra?: Record<string, unknown>;
 }
 
 /**
@@ -55,12 +57,21 @@ export function configLookup200(options: ConfigLookupOptions): GripReply {
       },
       permissions: { type_permissions: options.typePermissions ?? {} },
     },
+    ...options.extra,
   });
 }
 
 /** docs/api/containers.md § Answers: 404 with `data` `No results found for this container name`. */
 export function configLookup404(): GripReply {
   return failure("No results found for this container name", 404);
+}
+
+/**
+ * docs/api/containers.md § What a session cannot see: `GET container/<id>` of an ended container or another
+ * application's container answers 404 `container not found`.
+ */
+export function containerNotFound404(): GripReply {
+  return failure("container not found", 404);
 }
 
 export interface ContainerEntry {
