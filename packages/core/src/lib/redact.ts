@@ -145,20 +145,22 @@ const TOKEN_CHARACTER_SOURCE = String.raw`[^\s"',$<{}]`;
 
 /**
  * A base64 value of at least 16 characters, the `=` padding counted among them (issue #5 § Redaction, amended
- * 2026-10-15): a run of 16 or more with optional padding, or 15 and `=`, or 14 and `==`. Each alternative is linear.
+ * 2026-10-15): a run of 16 or more with optional padding, or 15 and one or two `=`, or 14 and `==`. Each alternative
+ * is linear, and each takes the padding whole.
  */
 const BASE64_VALUE_SOURCE =
-  `(?:${atLeast("[A-Za-z0-9+/]", 16)}={0,2}` + String.raw`|[A-Za-z0-9+/]{15}=|[A-Za-z0-9+/]{14}==)`;
+  `(?:${atLeast("[A-Za-z0-9+/]", 16)}={0,2}` + String.raw`|[A-Za-z0-9+/]{15}={1,2}|[A-Za-z0-9+/]{14}==)`;
 
 /**
  * The login `Authorization` value: `Bearer <token>, Basic <base64>`. Groups: scheme, token, separator with scheme,
- * base64.
+ * base64. § Redaction sets no floor on either value: the two scheme words and the comma between them are the
+ * context, so a short token or a short `email:password` is caught too.
  */
 export const LOGIN_AUTHORIZATION_PATTERN_SOURCE =
   String.raw`(Bearer\s+)(` +
-  atLeast(TOKEN_CHARACTER_SOURCE, 8) +
-  String.raw`)(,\s*Basic\s+)(` +
-  BASE64_VALUE_SOURCE +
+  TOKEN_CHARACTER_SOURCE +
+  String.raw`+)(,\s*Basic\s+)(` +
+  String.raw`[A-Za-z0-9+/]+={0,2}` +
   ")";
 
 /**
@@ -195,10 +197,11 @@ export const GRIP_CDP_TOKEN_PATTERN_SOURCE =
   String.raw`)(")`;
 
 /**
- * A bare `Bearer <token>` value. Groups: scheme, token. Run time only: the docs print the public bootstrap bearer this
- * way.
+ * A bare `Bearer <token>` value of `MIN_REGISTERED_SECRET_LENGTH` characters or more, the floor the module applies
+ * to every secret; a shorter run after the word is prose (`Bearer of the Ring`). Groups: scheme, token. Run time
+ * only: the docs print the public bootstrap bearer this way.
  */
-export const BEARER_PATTERN_SOURCE = String.raw`(\bBearer\s+)(` + atLeast(TOKEN_CHARACTER_SOURCE, 16) + ")";
+export const BEARER_PATTERN_SOURCE = String.raw`(\bBearer\s+)(` + atLeast(TOKEN_CHARACTER_SOURCE, 8) + ")";
 
 /** A shape the lint and `redactString` both apply, with what the lint tells the reader of a finding of it. */
 export interface SecretShape {
