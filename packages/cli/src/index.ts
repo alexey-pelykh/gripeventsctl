@@ -7,14 +7,26 @@ import { Command, CommanderError } from "commander";
 import { registerSignin } from "./commands/auth/signin.js";
 import { registerSignout } from "./commands/auth/signout.js";
 import { registerStatus } from "./commands/auth/status.js";
+import { commandFromOperation } from "./lib/command-from-operation.js";
 import { type CliContext, type CliOptions, createContext } from "./lib/context.js";
 import { USAGE_EXIT_CODE, printError } from "./lib/exit-codes.js";
 import { packageVersion } from "./lib/package-version.js";
 
 export const PROGRAM_NAME = "gripeventsctl";
 
+export { commandFromOperation } from "./lib/command-from-operation.js";
 export { type CliOptions } from "./lib/context.js";
 export { EXIT_CODES, type ErrorReport, describeError, exitCodeOf } from "./lib/exit-codes.js";
+export {
+  type RenderHints,
+  type RenderOptions,
+  type WriteOutputOptions,
+  escapeForTerminal,
+  redactOutput,
+  renderHuman,
+  validateOutput,
+  writeOutput,
+} from "./lib/output.js";
 export { type OutputStream, type Terminal, realTerminal } from "./lib/terminal.js";
 
 /**
@@ -36,8 +48,9 @@ const PROGRAM_DESCRIPTION =
 
 /**
  * Build the Commander program over `options` (the real terminal, streams, clock, environment and
- * platform by default). Commands register here as they land, at depth two (`group verb`); the
- * umbrella package handles `gripeventsctl mcp` before this program sees argv.
+ * platform by default): the `auth` group, then one leaf `<group> <verb>` per entry of
+ * `options.operations` (the registry `OPERATIONS` by default), at depth two; the umbrella package
+ * handles `gripeventsctl mcp` before this program sees argv.
  *
  * Output goes through the context's terminal: human output on stdout, errors and diagnostics on
  * stderr, Commander's own output included, every stderr text through `redactString` and every
@@ -69,7 +82,24 @@ function programFor(context: CliContext): Command {
       },
     });
   registerAuth(program, context);
+  registerOperations(program, context);
   return program;
+}
+
+/**
+ * One group command per operation group, created once (an existing group, `auth` included, is reused: a second
+ * `program.command(name)` would throw), and one leaf per operation under it, with the program's output and exit
+ * settings copied onto the leaf.
+ */
+function registerOperations(program: Command, context: CliContext): void {
+  for (const op of context.operations) {
+    const group =
+      program.commands.find((command) => command.name() === op.group) ??
+      program.command(op.group).description(`${op.group} commands`);
+    const leaf = commandFromOperation(op, context);
+    leaf.copyInheritedSettings(group);
+    group.addCommand(leaf);
+  }
 }
 
 function registerAuth(program: Command, context: CliContext): void {

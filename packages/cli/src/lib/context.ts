@@ -8,7 +8,16 @@
  * captured streams and fakes.
  */
 
-import { type Clock, type LoadResult, redactString, systemClock, workTreeWarnings } from "@gripeventsctl/core";
+import {
+  type Clock,
+  GripClient,
+  type LoadResult,
+  OPERATIONS,
+  type Operation,
+  redactString,
+  systemClock,
+  workTreeWarnings,
+} from "@gripeventsctl/core";
 import type { Dispatcher } from "undici";
 
 import { type Terminal, realTerminal } from "./terminal.js";
@@ -26,6 +35,10 @@ export interface CliOptions {
   env?: NodeJS.ProcessEnv;
   /** The platform the mode rules and the Windows notice are chosen for; `process.platform` by default. */
   platform?: NodeJS.Platform;
+  /** The operations the program registers as `<group> <verb>` leaves beside `auth`; the registry `OPERATIONS` by default. */
+  operations?: readonly Operation[];
+  /** Whether stdout counts as a TTY for the human renderings (box-drawing, colour); the terminal's own flag by default. */
+  isTTY?: boolean;
 }
 
 export interface CliContext {
@@ -36,18 +49,34 @@ export interface CliContext {
   clock: Clock;
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
+  operations: readonly Operation[];
+  isTTY: boolean;
+  /** The one `GripClient` of this program, built on first use over the context's dispatcher, clock, environment and stderr. */
+  client(): GripClient;
 }
 
 /** The context `options` gives, with the process's own terminal, streams, clock, environment and platform as defaults. */
 export function createContext(options: CliOptions = {}): CliContext {
+  const terminal = options.terminal ?? realTerminal();
+  const stderr = options.stderr ?? process.stderr;
+  const dispatcher = options.dispatcher;
+  const clock = options.clock ?? systemClock;
+  const env = options.env ?? process.env;
+  let client: GripClient | undefined;
   return {
-    terminal: options.terminal ?? realTerminal(),
+    terminal,
     stdout: options.stdout ?? process.stdout,
-    stderr: options.stderr ?? process.stderr,
-    dispatcher: options.dispatcher,
-    clock: options.clock ?? systemClock,
-    env: options.env ?? process.env,
+    stderr,
+    dispatcher,
+    clock,
+    env,
     platform: options.platform ?? process.platform,
+    operations: options.operations ?? OPERATIONS,
+    isTTY: options.isTTY ?? terminal.isStdoutTTY(),
+    client: () => {
+      client ??= new GripClient({ ...(dispatcher === undefined ? {} : { dispatcher }), clock, env, stderr });
+      return client;
+    },
   };
 }
 
