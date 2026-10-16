@@ -24,14 +24,14 @@ Requires **Node.js >= 22.19.0**, ESM only.
 | Command                                                     | What it does                                                                                                      |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `auth signin <slug> [--container-id <n>] [--email <email>]` | Look the event up, read the credentials from the terminal or a 1Password item, sign in once, store the session    |
-| `auth signout`                                              | Remove the stored session; the writes switch and the credentials reference stay                                   |
+| `auth signout`                                              | Remove the stored session; the writes enabled switch and the credentials reference stay                           |
 | `auth status`                                               | Show the stored session (slug, container, sign-in time, first authentication failure); reads the config file only |
 
 `--json` on the program gives machine-readable output on stdout. Human output goes to stdout; errors and diagnostics go to stderr. The config file path comes from `GRIPEVENTSCTL_CONFIG_FILE` (default `~/.gripeventsctl.yaml`); there is no `--config` option.
 
 ## Exit codes
 
-Success exits 0. A failure prints one line on stderr (`<message>; hint: <hint>`), or with `--json` one object `{ "error": { "kind", "message", "hint" } }` on stderr and nothing on stdout. The code follows the error's `kind`:
+Success exits 0. A failure prints one line on stderr (`<message>; hint: <hint>`), or with `--json` one object `{ "error": { "kind", "message", "hint" } }` on stderr and nothing on stdout. Commander's own usage errors (unknown command, missing argument, unknown option, too many arguments) are the exception: they print Commander's message and the command's help on stderr, in the human form even with `--json`, never echoing a value typed in the wrong place. The code follows the error's `kind`:
 
 | `kind`                                              | Exit |
 | --------------------------------------------------- | ---- |
