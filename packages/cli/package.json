@@ -35,13 +35,15 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "lint": "eslint src/",
+    "lint": "eslint src/ vitest.config.ts",
     "dev": "tsc --watch"
   },
   "devDependencies": {
+    "@gripeventsctl/testing": "workspace:^",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
+    "undici": "catalog:",
     "vitest": "catalog:"
   },
   "dependencies": {
@@ -49,6 +51,7 @@
     "@gripeventsctl/core": "workspace:^",
     "cli-table3": "catalog:",
     "commander": "catalog:",
+    "undici": "catalog:",
     "yaml": "catalog:",
     "zod": "catalog:"
   }

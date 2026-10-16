@@ -125,6 +125,22 @@ describe("[CAP-CLIENT] the config lookup answer (docs/api/containers.md § Field
     expect("default_container_id" in parsed).toBe(false);
   });
 
+  it("types container.general.container_id as an optional positive integer (docs/api/containers.md, through #6)", () => {
+    const { applicationToken } = fixtureSecrets();
+    const data = configData(applicationToken);
+    const general = (data["container"] as { general: Record<string, unknown> }).general;
+    const withId = { ...data, container: { general: { ...general, container_id: 9840 } } };
+    expect(configLookupSchema.parse(withId).container.general.container_id).toBe(9840);
+    expect(configLookupSchema.parse(data).container.general.container_id).toBeUndefined();
+    for (const bad of ["9840", 0, -1, 1.5]) {
+      const result = configLookupSchema.safeParse({
+        ...data,
+        container: { general: { ...general, container_id: bad } },
+      });
+      expect(result.success, String(bad)).toBe(false);
+    }
+  });
+
   it("keeps type_permissions as sent and lets permissions be absent", () => {
     const { applicationToken } = fixtureSecrets();
     const data = configData(applicationToken);

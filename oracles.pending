@@ -1,7 +1,6 @@
 # Oracle files whose subject modules are not built yet. One repository-relative path per line, sorted.
 # `pnpm check-oracles` lets a listed file fail only with `oracle subject missing`; a file not listed must
 # pass. The pull request that builds a subject removes its oracle files from this list.
-packages/cli/src/__tests__/auth-password-never-leaks.oracle.test.ts
 packages/cli/src/__tests__/terminal-escaping.oracle.test.ts
 packages/core/src/__tests__/export-file.oracle.test.ts
 packages/core/src/__tests__/gate.oracle.test.ts

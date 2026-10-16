@@ -10,6 +10,11 @@ export interface ConfigLookupOptions {
    * (`WSAI26` beside the slug `wsai26`), so the equality is a fixture convenience, not a platform fact.
    */
   slug: string;
+  /**
+   * `container.general.container_id`, the looked-up container's own id, where given: a live run of 2026-10-13 recorded
+   * it for the live edition and absent for the ended one (`docs/api/containers.md` § Fields of a 200 answer, through #6).
+   */
+  containerId?: number;
   displayName?: string;
   /** `1` while the edition is live, `0` once it has ended. */
   active?: 0 | 1;
@@ -34,7 +39,12 @@ export interface ConfigLookupOptions {
 export function configLookup200(options: ConfigLookupOptions): GripReply {
   return success200({
     container: {
-      general: { display_name: options.displayName ?? "Test Event 1", name: options.slug, active: options.active ?? 1 },
+      general: {
+        ...(options.containerId === undefined ? {} : { container_id: options.containerId }),
+        display_name: options.displayName ?? "Test Event 1",
+        name: options.slug,
+        active: options.active ?? 1,
+      },
     },
     application: {
       general: {

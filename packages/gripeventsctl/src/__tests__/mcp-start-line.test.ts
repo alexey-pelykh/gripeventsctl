@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { type TempHome, fixtureSecrets, withTempHome } from "@gripeventsctl/testing";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it } from "vitest";
 
 const CLI = fileURLToPath(new URL("../../dist/cli.js", import.meta.url));
@@ -19,6 +20,22 @@ interface Run {
   errors: Error[];
   /** The server name from the initialize handshake. */
   serverName: string | undefined;
+  /** The tool names `tools/list` answered. */
+  toolNames: string[];
+}
+
+/**
+ * The names `tools/list` answers. A server with no tool registered advertises no `tools` capability and answers
+ * `tools/list` with "Method not found" (`@modelcontextprotocol/sdk` 1.32.1): that is the empty list, which the auth
+ * item asserts holds no `gripeventsctl_auth_` tool; the parity gate item asserts the same against the full list.
+ */
+async function listToolNames(client: Client): Promise<string[]> {
+  try {
+    return (await client.listTools()).tools.map((tool) => tool.name);
+  } catch (error: unknown) {
+    if (error instanceof McpError && error.code === ErrorCode.MethodNotFound) return [];
+    throw error;
+  }
 }
 
 /** Start the built binary as `gripeventsctl mcp` with `home`, run one protocol exchange, stop it. */
@@ -47,6 +64,7 @@ async function runServer(home: TempHome): Promise<Run> {
   try {
     // The server has no tools yet, so the round trip after the handshake is a ping.
     await client.ping();
+    const toolNames = await listToolNames(client);
     // stderr and stdout are separate pipes: give the start line a moment to arrive after the reply.
     for (let waited = 0; !stderr.includes("\n") && waited < 5000; waited += 50) {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -55,6 +73,7 @@ async function runServer(home: TempHome): Promise<Run> {
       stderrLines: stderr.split(/\r?\n/).filter((line) => line !== ""),
       errors,
       serverName: client.getServerVersion()?.name,
+      toolNames,
     };
   } finally {
     await client.close();
@@ -68,6 +87,20 @@ describe("[CAP-PARITY] the gripeventsctl mcp start line", () => {
       expect(run.errors).toEqual([]);
       expect(run.serverName).toBe("gripeventsctl");
       expect(run.stderrLines).toEqual([`gripeventsctl mcp: config ${home.configFile}, no config`]);
+    });
+  });
+
+  it("[CAP-AUTH] lists no tool whose name starts with gripeventsctl_auth_ when a session is stored", async () => {
+    await withTempHome(async (home) => {
+      const token = fixtureSecrets().sessionToken;
+      await writeFile(
+        home.configFile,
+        `version: 1\nsession:\n  slug: testevent1\n  container_id: 1\n  token: ${token}\n  signed_in_at: 2026-10-12T19:09:00Z\nwrites:\n  enabled: false\n`,
+        { mode: 0o600 },
+      );
+      const run = await runServer(home);
+      expect(run.errors).toEqual([]);
+      expect(run.toolNames.filter((name) => name.startsWith("gripeventsctl_auth_"))).toEqual([]);
     });
   });
 

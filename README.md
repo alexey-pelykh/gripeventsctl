@@ -33,7 +33,7 @@ The friction in the code is on purpose: writes are off by default, repeats are b
 This repository holds the workspace scaffold and, in `@gripeventsctl/core`, the transport client the commands will use (`GripClient`: the fixed base URL and header set, the config lookup, the login call, the response envelope and error kinds, the HTTP 429 backoff, paging, one request in flight per process). The commands below under "Planned surface" do not exist yet.
 
 - Nothing is published to npm yet. The npm badges show "not found" until the first release.
-- The binary answers `--version` and `--help`. It has no other commands.
+- The binary answers `--version`, `--help` and the three `auth` commands (`auth signin <slug>`, `auth signout`, `auth status`). It has no other commands.
 - `gripeventsctl mcp` starts the MCP server over stdio. The server has no tools yet.
 
 ## Install
@@ -104,8 +104,10 @@ Attendee data is other people's personal data. When an assistant calls a tool, t
 You sign in yourself, in a terminal:
 
 ```sh
-gripeventsctl auth signin
+gripeventsctl auth signin <slug>
 ```
+
+The slug is the last part of the event's web address, `https://matchmaking.grip.events/<slug>`. The command looks the event up, asks for your email and your password (the password is never echoed), signs in once and stores the session. `--email <email>` skips the email prompt; `--container-id <n>` overrides the container id the event config names. There is no `--password` option, and the password is never read from an argument or an environment variable. With `auth.credentials` set to a 1Password item (`op://<vault>/<item>` holding a `username` and a `password` field), the command reads both from the 1Password CLI and needs no terminal.
 
 The password never passes through an AI assistant. The MCP server has no sign-in tool: it only uses the session token that you already captured.
 
@@ -114,7 +116,7 @@ The session token is stored in one of two ways:
 - In `~/.gripeventsctl.yaml` with file mode `0600`.
 - As a reference to a 1Password item, written as an `op://` path.
 
-`auth signout` removes the token. `auth status` shows whether you are signed in.
+`auth signout` removes the token. `auth status` shows whether you are signed in, for which event and since when, and reads the config file only. `--json` on any command gives machine-readable output on stdout; errors go to stderr with one exit code per kind of failure (see [`packages/cli/README.md`](packages/cli/README.md#exit-codes)).
 
 ## Writes are gated
 
