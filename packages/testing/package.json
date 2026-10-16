@@ -24,7 +24,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "lint": "eslint src/",
+    "lint": "eslint src/ vitest.config.ts",
     "dev": "tsc --watch"
   },
   "devDependencies": {

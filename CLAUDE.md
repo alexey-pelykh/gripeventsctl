@@ -15,7 +15,7 @@ Packages: `packages/core` (`@gripeventsctl/core`: client, session, redaction), `
 - **Formatting**: Prettier (`pnpm format`) with the settings in `.editorconfig`: two-space indent for TypeScript, JavaScript, JSON, YAML and Markdown, 120 columns. `pnpm format:check` runs in CI.
 - **Dependencies**: versions live in the `catalog:` of `pnpm-workspace.yaml`; package manifests reference `catalog:`; workspace packages reference each other as `workspace:^`. A new pin is read from the registry on the day it is added. A new production dependency must pass `pnpm license-check` (allow-list in `scripts/check-licenses.js`).
 - **TypeScript**: `tsconfig.base.json` sets ES2024, NodeNext, strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` and `verbatimModuleSyntax`. Relative imports carry the `.js` suffix. ESLint runs `strictTypeChecked`; a number in a template literal goes through `String(n)`.
-- **Tests**: unit tests live in `src/__tests__/<subject>.test.ts` next to the code and run with Vitest through `pnpm test`. Live tests are `*.e2e.test.ts` under `packages/e2e/src/` only, collected only when `GRIPEVENTSCTL_E2E=1`, run one file at a time, and read only, except one guarded write against the user's own chat thread. Fixtures are synthetic: never a real token, never a real attendee record.
+- **Tests**: unit tests live in `src/__tests__/<subject>.test.ts` next to the code and run with Vitest through `pnpm test`. Live tests are `*.e2e.test.ts` under `packages/e2e/src/` only, collected only when `GRIPEVENTSCTL_E2E=1`, run one file at a time, and read only, except one guarded write against the user's own chat thread. Fixtures are synthetic: never a real token, never a real attendee record. Every test file's first `describe` title starts with its `[CAP-<NAME>]` tags from `test-capabilities.yaml`; `pnpm check-test-traceability` enforces it, and the item that lands a capability's first tagged test flips its row to `active`.
 - **CLI/MCP parity**: every CLI leaf command `gripeventsctl <group> <verb>` has a twin MCP tool `gripeventsctl_<group>_<verb>`, and vice versa. A deliberate divergence goes in `.mcp-exempt.yaml` with a reason. `auth signin`, `auth signout` and `auth status` are the standing CLI-only set. The umbrella intercepts `mcp` before Commander parses argv.
 - **Vocabulary for writes**: "safe mode" is the default state in which writes are off; "writes enabled" is the config switch that turns them on; the "repeat guard" refuses a second action of the same kind against the same target; the "send log" is the append-only record of every write; a "recorded go-ahead" is the user's stored consent that an assistant-written message may be sent. Use these names in code, docs and messages.
 
@@ -41,7 +41,7 @@ Packages: `packages/core` (`@gripeventsctl/core`: client, session, redaction), `
 - `pnpm-workspace.yaml`: packages, catalog, pnpm settings. `turbo.json`: task graph and the environment variables passed to tests.
 - `eslint.config.js`, `tsconfig.base.json`, `.prettierrc.json`, `.editorconfig`: the code rules.
 - `.mcp-exempt.yaml`: declared CLI/MCP divergences.
-- `scripts/check-secret-leakage.ts`, `scripts/check-dep-confusion.ts`, `scripts/check-licenses.js`: the repository gates.
+- `scripts/check-secret-leakage.ts`, `scripts/check-dep-confusion.ts`, `scripts/check-licenses.js`, `scripts/check-test-traceability.ts`: the repository gates; `test-capabilities.yaml` is the capability catalog the last one reads.
 - `docs/api/`: the API notes, one page per surface, every claim dated; `docs/api/not-verified.md` lists the gaps.
 - `docs/legitimacy.md`, `SECURITY.md`, `CONTRIBUTING.md`: posture, disclosure channel, contribution rules.
 - `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.github/rulesets/`: CI, release, branch protection.
@@ -53,9 +53,9 @@ Packages: `packages/core` (`@gripeventsctl/core`: client, session, redaction), `
 pnpm install                        # frozen lockfile in CI
 pnpm build                          # tsc per package through Turborepo
 pnpm typecheck
-pnpm lint                           # Prettier check, ESLint, secret leakage, dependency confusion: the pre-push gate
+pnpm lint                           # Prettier check, ESLint, secret leakage, dependency confusion, test traceability: the pre-push gate
 pnpm license-check                  # separate from lint
-pnpm test                           # unit tests
+pnpm test                           # unit tests, then the script self-tests under scripts/__tests__/
 GRIPEVENTSCTL_E2E=1 pnpm test:e2e   # live suite, after `gripeventsctl auth signin`
 pnpm format                         # fix formatting
 node packages/gripeventsctl/dist/cli.js --help
