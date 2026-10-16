@@ -32,6 +32,10 @@ export interface RunCliIo {
   env: NodeJS.ProcessEnv;
   /** The platform the Windows notice and the mode rules are chosen for; the process's own by default. */
   platform?: NodeJS.Platform;
+  /** The operations the program registers beside the auth group; the registry by default (issue #9). */
+  operations?: readonly unknown[];
+  /** Whether stdout counts as a TTY for the human renderings; the terminal's own flag by default (issue #9). */
+  isTTY?: boolean;
 }
 
 export interface RunCliResult {
@@ -56,6 +60,8 @@ interface CliModule {
       clock: Clock;
       env: NodeJS.ProcessEnv;
       platform?: NodeJS.Platform;
+      operations?: readonly unknown[];
+      isTTY?: boolean;
     },
   ): Promise<{ exitCode: number; error?: unknown }>;
 }
@@ -98,6 +104,8 @@ export async function runCli(argv: readonly string[], io: RunCliIo): Promise<Run
       clock: io.clock,
       env: io.env,
       ...(io.platform === undefined ? {} : { platform: io.platform }),
+      ...(io.operations === undefined ? {} : { operations: io.operations }),
+      ...(io.isTTY === undefined ? {} : { isTTY: io.isTTY }),
     }),
   );
   const result = run.result;
