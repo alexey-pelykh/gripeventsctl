@@ -38,9 +38,13 @@ const TYPE_EXPORTS = [
   "LoginInput",
   "LoginResult",
   "OpReference",
+  "Operation",
+  "OperationContext",
+  "OperationKind",
   "PagesOptions",
   "PostOptions",
   "Query",
+  "RequestShape",
   "ResolveSessionTokenOptions",
   "Session",
   "SessionOptions",
@@ -107,6 +111,9 @@ const VALUE_EXPORTS = [
   "resolveSessionToken",
   "saveConfig",
   "saveSession",
+  // operations/registry.ts (issue #9): the registry and its identity helper; the operation items fill the list.
+  "OPERATIONS",
+  "defineOperation",
   // config/op.ts
   "OP_NOT_FOUND_MESSAGE",
   "isFieldReference",
