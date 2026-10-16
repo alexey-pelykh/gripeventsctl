@@ -83,6 +83,14 @@ export {
   saveSession,
 } from "./config/store.js";
 export {
+  OPERATIONS,
+  type Operation,
+  type OperationContext,
+  type OperationKind,
+  type RequestShape,
+  defineOperation,
+} from "./operations/index.js";
+export {
   type ExecFileLike,
   OP_NOT_FOUND_MESSAGE,
   type OpReference,
