@@ -23,4 +23,14 @@ export {
   fakeTerminal,
 } from "./terminal.js";
 export { type RunCliIo, type RunCliResult, runCli } from "./cli-harness.js";
+export { type CapturedOutput, captureProcessOutput } from "./capture-output.js";
+export { MCP_TEST_CLIENT, type McpLink, linkMcp } from "./mcp-harness.js";
+export {
+  type SpawnMcpStdioOptions,
+  type StdioLink,
+  repositoryRoot,
+  spawnMcpStdio,
+  umbrellaBinary,
+} from "./stdio-harness.js";
+export { GO_MESSAGE, READY_MESSAGE, type Worker, barrier, forkWorker, killAtIntercept } from "./child.js";
 export * from "./envelopes/index.js";

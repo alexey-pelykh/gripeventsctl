@@ -4,7 +4,10 @@
 /**
  * `runCli(argv, io)`: run the real CLI program (`runProgram` of `@gripeventsctl/cli`) over the seams
  * the test supplies, with stdout and stderr captured, and read back the two streams, the exit code
- * and the error the run failed with.
+ * and the error the run failed with. A line the command writes past its injected streams, through
+ * `process.stdout`, `process.stderr` or `console`, is captured for the duration of the call too and
+ * returned with the injected output, so no line reaches the test runner's own streams; a write made
+ * after the call returned is not covered.
  *
  * This package depends on no workspace package, and the CLI depends on this one for its tests, so
  * `@gripeventsctl/cli` cannot be a dependency here: the harness loads the CLI's built entry
@@ -16,6 +19,7 @@ import { existsSync } from "node:fs";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { captureProcessOutput } from "./capture-output.js";
 import type { Clock } from "./fake-clock.js";
 import type { Terminal } from "./terminal.js";
 
@@ -31,7 +35,9 @@ export interface RunCliIo {
 }
 
 export interface RunCliResult {
+  /** The injected stdout, then what reached `process.stdout` or `console.log` during the call. */
   stdout: string;
+  /** The injected stderr, then what reached `process.stderr` or `console.error` during the call. */
   stderr: string;
   exitCode: number;
   /** The error the exit-code printer received, where the run failed. */
@@ -83,18 +89,21 @@ export async function runCli(argv: readonly string[], io: RunCliIo): Promise<Run
   const module = await loadCli();
   const stdout = new Capture();
   const stderr = new Capture();
-  const result = await module.runProgram(argv, {
-    terminal: io.terminal,
-    stdout,
-    stderr,
-    ...(io.dispatcher === undefined ? {} : { dispatcher: io.dispatcher }),
-    clock: io.clock,
-    env: io.env,
-    ...(io.platform === undefined ? {} : { platform: io.platform }),
-  });
+  const run = await captureProcessOutput(() =>
+    module.runProgram(argv, {
+      terminal: io.terminal,
+      stdout,
+      stderr,
+      ...(io.dispatcher === undefined ? {} : { dispatcher: io.dispatcher }),
+      clock: io.clock,
+      env: io.env,
+      ...(io.platform === undefined ? {} : { platform: io.platform }),
+    }),
+  );
+  const result = run.result;
   return {
-    stdout: stdout.text,
-    stderr: stderr.text,
+    stdout: stdout.text + run.stdout,
+    stderr: stderr.text + run.stderr,
     exitCode: result.exitCode,
     ...("error" in result ? { error: result.error } : {}),
   };
