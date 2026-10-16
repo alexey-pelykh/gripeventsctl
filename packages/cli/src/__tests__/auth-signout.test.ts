@@ -15,7 +15,7 @@ function requests(): number {
 }
 
 describe("[CAP-AUTH] auth signout", () => {
-  it("removes the session and keeps the writes switch and the credentials reference, with no request", async () => {
+  it("removes the session and keeps the writes enabled switch and the credentials reference, with no request", async () => {
     await withTempHome(async (home) => {
       const token = fixtureSecrets().sessionToken;
       await writeFile(

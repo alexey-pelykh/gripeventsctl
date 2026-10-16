@@ -43,7 +43,6 @@
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
-    "undici": "catalog:",
     "vitest": "catalog:"
   },
   "dependencies": {
