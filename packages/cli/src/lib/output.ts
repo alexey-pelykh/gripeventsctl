@@ -14,7 +14,8 @@
  *   named in `render.epochFields` renders as local ISO 8601 with the offset (`2026-10-12T19:09:00+02:00`); a key
  *   named `thing_id` or `id` is always a visible column, as every key of a record is. Colour is used only for
  *   emphasis (the table header in bold), never as the only carrier of a state, and is off when `NO_COLOR` is set or
- *   stdout is not a TTY.
+ *   stdout is not a TTY. An operation whose item fixes its own human form gives it as `render.human`; its text is
+ *   escaped here like every other human rendering, and the `--json` form and `structuredContent` never use it.
  * - The redaction backstop: `writeOutput()` passes the human text and the `--json` text through `redactString`
  *   before writing, and `redactOutput()` does the same for every string value of the MCP `structuredContent`, the
  *   last line of defence behind the projections. `redactString` runs last: render, then redact, then write, so a
@@ -40,6 +41,12 @@ export interface RenderHints {
   epochFields?: readonly string[] | undefined;
   /** The sentence printed for an empty array result. */
   emptyText?: string | undefined;
+  /**
+   * The operation's own human form of its validated output, where its item fixes one the generic renderings cannot
+   * give (`events check`: one line and a sentence for an unknown slug). Escaped here like every other human form,
+   * redacted by the caller; never used for `--json` or `structuredContent`.
+   */
+  human?: ((output: unknown) => string) | undefined;
 }
 
 export interface RenderOptions {
@@ -194,11 +201,13 @@ function renderTable(
 }
 
 /**
- * The human form of `output`, escaped, without a trailing newline: a table for an array of flat records, key-value
- * lines for an object, the empty-text sentence for an empty array, one line per entry for an array of scalars, and
- * the value itself for a scalar.
+ * The human form of `output`, escaped, without a trailing newline: the operation's own form where `render.human`
+ * gives one; else a table for an array of flat records, key-value lines for an object, the empty-text sentence for an
+ * empty array, one line per entry for an array of scalars, and the value itself for a scalar.
  */
 export function renderHuman(output: unknown, options: RenderOptions = {}): string {
+  const human = options.render?.human;
+  if (human !== undefined) return escapeForTerminal(human(output));
   const epochFields = options.render?.epochFields ?? [];
   const tty = options.tty === true;
   const colour = tty && options.colour === true;
