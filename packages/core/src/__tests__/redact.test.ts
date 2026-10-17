@@ -201,9 +201,10 @@ describe("the grip_cdp_token shape (issue #5 § Redaction: the JSON key-value fo
 describe("redaction over a whole answer body (an error redacts up to the 16 MiB body cap before it cuts the excerpt)", () => {
   it("redacts a run of eyJ with no dot in time linear in its length (skipped where a run takes too little time to measure)", (context) => {
     // The fastest of five passes, after one to warm up: a run 16 times as long takes about 16 times as long when the
-    // work is linear, and 256 times when it is quadratic. The bound, 64, is four times the linear ratio and a quarter of
-    // the quadratic one, so noise that slows every pass of the long run fourfold still passes linear work, and quadratic
-    // work passes only where every pass of its short run measures four times slower than it ran.
+    // work is linear, and 256 times when it is quadratic. The bound, 128, is eight times the linear ratio and half the
+    // quadratic one, so noise that slows every pass of the long run eightfold still passes linear work, and quadratic
+    // work passes only where every pass of its short run measures twice as slow as it ran. The earlier bound of 64 read
+    // 65 to 75 for linear work on the macOS runners, where the long run slows more than the short one does (#53).
     const fastest = (run: string): number => {
       expect(redactString(run)).toBe(run);
       let best = Number.POSITIVE_INFINITY;
@@ -229,7 +230,7 @@ describe("redaction over a whole answer body (an error redacts up to the 16 MiB 
         `a run of ${String(length)} characters takes ${short.toFixed(3)} ms here, under the ${String(measurableMs)} ms this case can time`,
       );
     }
-    expect(fastest(eyJRun(length * 16)) / short).toBeLessThan(64);
+    expect(fastest(eyJRun(length * 16)) / short).toBeLessThan(128);
   });
 
   it("still replaces a JWT-shaped value after a long run of eyJ", () => {
