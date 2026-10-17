@@ -51,6 +51,7 @@ import {
   renderEventsCheck,
 } from "../operations/events/check.js";
 import { eventsList } from "../operations/events/list.js";
+import { BOOTSTRAP_BEARER, USER_AGENT } from "../transport/headers.js";
 
 const agent = mockGrip();
 
@@ -104,6 +105,10 @@ async function contextOf(home: TempHome): Promise<OperationContext> {
 }
 
 interface LookupBodyOptions {
+  /** `data.container.general.name`; `testevent1` by default. */
+  name?: string;
+  /** `data.container.general.display_name`; `Test Event 1` by default. */
+  displayName?: string;
   containerId?: number;
   defaultContainerId?: number;
   permissions?: Record<string, unknown> | undefined;
@@ -119,8 +124,8 @@ function lookupBody(secrets: FixtureSecrets, options: LookupBodyOptions): GripRe
     container: {
       general: {
         ...(options.containerId === undefined ? {} : { container_id: options.containerId }),
-        display_name: "Test Event 1",
-        name: "testevent1",
+        display_name: options.displayName ?? "Test Event 1",
+        name: options.name ?? "testevent1",
         active: 1,
       },
     },
@@ -198,14 +203,14 @@ describe("[CAP-EVENTS] events check <slug>: the config lookup by slug, projected
       expect(call?.searchParams).toEqual({ container_name: "TestEvent1" });
       expect(call?.fullUrl).toBe(`${MOCK_API_ORIGIN}/1/config?container_name=TestEvent1`);
       const headers = lowerHeaders(call?.headers);
-      expect(headers["authorization"]).toMatch(/^Bearer \S+$/);
+      expect(headers["authorization"]).toBe(`Bearer ${BOOTSTRAP_BEARER}`);
       expect(headers["accept"]).toBe("application/json");
-      expect(headers["user-agent"]).toContain("Mozilla/");
+      expect(headers["user-agent"]).toBe(USER_AGENT);
       expect(headers).not.toHaveProperty("x-authorization");
     });
   });
 
-  it("falls back to the container name when display_name is empty, and maps active 0 to false", async () => {
+  it("falls back to the container name, not to the slug, when display_name is empty, and maps active 0 to false", async () => {
     await withTempHome(async (home) => {
       const secrets = fixtureSecrets();
       armLookup("testevent2", () =>
@@ -215,6 +220,11 @@ describe("[CAP-EVENTS] events check <slug>: the config lookup by slug, projected
       expect(output["display_name"]).toBe("testevent2");
       expect(output["name"]).toBe("testevent2");
       expect(output["active"]).toBe(false);
+      // The container name differs from the slug sent: the fallback reads the answer, never the input.
+      armLookup("Slug-3", () => lookupBody(secrets, { name: "container-name-3", displayName: "", permissions: {} }));
+      const differs = (await run(home, "Slug-3")) as Record<string, unknown>;
+      expect(differs["display_name"]).toBe("container-name-3");
+      expect(differs["name"]).toBe("container-name-3");
     });
   });
 
@@ -263,6 +273,10 @@ describe("[CAP-EVENTS] events check <slug>: the config lookup by slug, projected
       armLookup("nosuchslug", () => configLookup404());
       const output = await run(home, "nosuchslug");
       expect(output).toStrictEqual(UNKNOWN_SLUG_OUTPUT);
+      // In any letter case: the slug is sent as given and the answer is the same outcome.
+      armLookup("NoSuchSlug", () => configLookup404());
+      expect(await run(home, "NoSuchSlug")).toStrictEqual(UNKNOWN_SLUG_OUTPUT);
+      expect(calls().at(-1)?.searchParams).toEqual({ container_name: "NoSuchSlug" });
       expect(output).not.toBe(UNKNOWN_SLUG_OUTPUT);
       for (const key of EVENTS_CHECK_KEYS) {
         if (key !== "slug_found") expect((output as Record<string, unknown>)[key], key).toBeNull();
