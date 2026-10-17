@@ -10,6 +10,7 @@
 
 import { createRequire } from "node:module";
 
+import { OPERATIONS } from "@gripeventsctl/core";
 import { fakeClock, fakeTerminal, runCli } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
@@ -39,10 +40,10 @@ describe("[CAP-AUTH] the help surface", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Unofficial");
     expect(result.stdout).toContain("--json");
-    const verbs = commandLines(result.stdout);
-    expect(verbs.some((line) => line.startsWith("auth"))).toBe(true);
-    expect(verbs.some((line) => line.startsWith("help"))).toBe(true);
-    expect(verbs).toHaveLength(2);
+    // `auth`, then one group per distinct registry group in registry order, then Commander's `help`.
+    const groups = [...new Set(OPERATIONS.map((op) => op.group))];
+    const verbs = commandLines(result.stdout).map((line) => line.split(/\s+/)[0]);
+    expect(verbs).toEqual(["auth", ...groups, "help"]);
   });
 
   it("gripeventsctl auth --help lists signin, signout and status one per line, and each verb has no subcommand", async () => {
