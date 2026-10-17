@@ -5,10 +5,13 @@
  * `events check <slug>` (issue #10 § `events check <slug>`): the config lookup by slug, with no session
  * (`docs/api/containers.md` § Config by slug). The output is an explicit projection of the 200 answer: whether the
  * slug is known, the display name (falling back to the container name when the display name is empty), the container
- * name, the active flag as a boolean, the application name, the looked-up container's own id
- * (`data.container.general.container_id`, `null` where the answer carries none, as the ended edition of the live run
- * of 2026-10-13 did; `default_container_id` is never read, because it names the application's default event) and the
- * type set (`data.application.permissions.type_permissions`, kept as the API sends it: no page records its keys yet).
+ * name, the active flag as a boolean, the application name, the container id (`data.container.general.container_id`,
+ * the field the page names for the looked-up container's own id; a live run of 2026-10-13 recorded the key present for
+ * a live edition and absent for an ended one, and whether its value is the looked-up container's rather than the
+ * application's default is listed as not verified on `docs/api/not-verified.md` § Containers; `null` where the answer
+ * carries no such key; `default_container_id` is never read, because it names the application's default event) and
+ * the type set (`data.application.permissions.type_permissions`, kept as the API sends it: no page records its keys
+ * yet).
  * The per-event application token in the answer is not a field of the output schema, so no output form carries it;
  * the transport registers it as a secret the moment it is parsed, the redaction backstop behind the projection.
  *
@@ -41,7 +44,7 @@ export const eventsCheckOutput = z.object({
   active: z.boolean().nullable(),
   /** `data.application.general.application_name`. */
   application_name: z.string().nullable(),
-  /** `data.container.general.container_id`, the looked-up container's own id, where the answer carries it. */
+  /** `data.container.general.container_id`, the field the page names for the container's own id, where the answer carries it. */
   container_id: z.number().int().nullable(),
   /** `data.application.permissions.type_permissions`, as the API sends it. */
   type_permissions: z.unknown().nullable(),
