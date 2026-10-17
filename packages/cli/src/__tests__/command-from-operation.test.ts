@@ -9,7 +9,7 @@
  * terminal. Nothing here reaches the network: the agent refuses every connection.
  */
 
-import { GripError, type GripErrorKind } from "@gripeventsctl/core";
+import { GripError, type GripErrorKind, type Operation } from "@gripeventsctl/core";
 import {
   type RunCliIo,
   type TempHome,
@@ -27,6 +27,7 @@ import {
   SYNTHETIC_EPOCH,
   type SyntheticInput,
   echoOutput,
+  syntheticInput,
   syntheticOperation,
 } from "../../../core/src/__tests__/fixtures/synthetic-operation.js";
 import { buildProgram } from "../index.js";
@@ -218,6 +219,37 @@ describe("[CAP-PARITY] [CAP-OUTPUT] the CLI builder: one leaf per operation by t
         expect(result.stdout).toBe("");
       });
     });
+
+    /** `dry_run` schemas without a `false` default: what an absent `--dry-run` must reach `run` as, then the schema. */
+    const BOOLEAN_FLAGS: [string, boolean, z.ZodType][] = [
+      ["a plain z.boolean()", false, z.boolean()],
+      ["an optional z.boolean()", false, z.boolean().optional()],
+      ["a z.boolean() with the zod default true", true, z.boolean().default(true)],
+    ];
+
+    it.each(BOOLEAN_FLAGS)(
+      "AC-02: over %s as dry_run, an absent --dry-run reaches run as %s with exit 0, and a present one as true",
+      async (_label, absentValue, dryRun) => {
+        await withTempHome(async (home) => {
+          const seen: unknown[] = [];
+          const operation: Operation = {
+            ...syntheticOperation({
+              run: (_ctx, input) => {
+                seen.push(input.dry_run);
+                return Promise.resolve(echoOutput(input));
+              },
+            }),
+            input: syntheticInput.extend({ dry_run: dryRun }),
+          };
+          const absent = await runCli(["synthetic", "echo", "42", "--type", "1"], io(home, [operation]));
+          expect(absent.exitCode, absent.stderr).toBe(0);
+          const present = await runCli(["synthetic", "echo", "42", "--type", "1", "--dry-run"], io(home, [operation]));
+          expect(present.exitCode, present.stderr).toBe(0);
+          expect(seen).toEqual([absentValue, true]);
+          expect(requests()).toBe(0);
+        });
+      },
+    );
 
     it("AC-04: --json prints exactly the output object, with an empty stderr; an array stays bare and an epoch stays a number", async () => {
       await withTempHome(async (home) => {

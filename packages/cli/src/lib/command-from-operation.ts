@@ -261,9 +261,13 @@ export function commandFromOperation(op: Operation, context: CliContext): Comman
       if (typeof raw === "string" && field !== undefined) collected[key] = convertArgument(raw, field);
     });
     for (const [key, attribute] of attributes) {
-      if (leaf.getOptionValueSource(attribute) !== "cli") continue;
       const field = fields.get(key);
       if (field === undefined) continue;
+      if (leaf.getOptionValueSource(attribute) !== "cli") {
+        // An absent boolean flag means false; where the zod field carries a default, zod applies it instead.
+        if (field.kind === "boolean" && !field.hasDefault) collected[key] = false;
+        continue;
+      }
       const raw: unknown = leaf.getOptionValue(attribute);
       collected[key] = field.kind === "boolean" ? raw === true : convertArgument(String(raw), field);
     }
