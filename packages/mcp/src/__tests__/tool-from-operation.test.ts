@@ -18,7 +18,7 @@
 
 import { readdir, writeFile } from "node:fs/promises";
 
-import { GripError, registerSecret } from "@gripeventsctl/core";
+import { GripError, OPERATIONS, registerSecret } from "@gripeventsctl/core";
 import {
   type McpLink,
   fakeClock,
@@ -34,7 +34,7 @@ import { describe, expect, it } from "vitest";
 
 import { echoOutput, syntheticOperation } from "../../../core/src/__tests__/fixtures/synthetic-operation.js";
 import { buildServer } from "../index.js";
-import { READ_BOUNDARY, READ_POSTURE, WRITE_BOUNDARY, WRITE_POSTURE } from "../lib/tool-from-operation.js";
+import { READ_BOUNDARY, READ_POSTURE, WRITE_BOUNDARY, WRITE_POSTURE, toolName } from "../lib/tool-from-operation.js";
 
 const agent = mockGrip();
 
@@ -437,10 +437,10 @@ describe("[CAP-PARITY] [CAP-OUTPUT] [CAP-TERMINAL-ESCAPING] [CAP-PACING] the MCP
       });
     });
 
-    it("AC-19: buildServer() with no argument still builds a server that lists no tool", async () => {
+    it("AC-19: buildServer() with no argument builds the server over the registry: one tool per operation, in registry order", async () => {
       const l = await linkMcp(buildServer());
       try {
-        expect(await l.listTools()).toEqual([]);
+        expect((await l.listTools()).map((tool) => tool.name)).toEqual(OPERATIONS.map(toolName));
       } finally {
         await l.close();
       }

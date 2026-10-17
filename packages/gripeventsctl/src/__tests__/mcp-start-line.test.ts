@@ -62,7 +62,7 @@ async function runServer(home: TempHome): Promise<Run> {
   };
   await client.connect(transport);
   try {
-    // The server has no tools yet, so the round trip after the handshake is a ping.
+    // A ping is the one round trip after the handshake that touches no tool.
     await client.ping();
     const toolNames = await listToolNames(client);
     // stderr and stdout are separate pipes: give the start line a moment to arrive after the reply.

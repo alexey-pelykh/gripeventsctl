@@ -45,8 +45,14 @@ describe("[CAP-TEST-TOOLING] spawnMcpStdio()", () => {
   it("completes the handshake, lists the tools, reads the start line from stderr and nothing from stdout", async () => {
     const link = await spawnMcpStdio({ home });
     try {
-      // The umbrella registers no tool yet; the registry item fills this list.
-      expect(await link.listTools()).toEqual([]);
+      // The umbrella registers one tool per operation of the registry: every name is `gripeventsctl_<group>_<verb>`,
+      // none is an auth tool, and the two operations of the events item are among them. The parity gate of the
+      // umbrella package compares the list itself with the registry; this harness test checks the handshake.
+      const names = (await link.listTools()).map((tool) => tool.name);
+      expect(names.length).toBeGreaterThan(0);
+      for (const name of names) expect(name).toMatch(/^gripeventsctl_[a-z0-9]+_[a-z0-9]+$/u);
+      expect(names.some((name) => name.startsWith("gripeventsctl_auth_"))).toBe(false);
+      expect(names).toEqual(expect.arrayContaining(["gripeventsctl_events_check", "gripeventsctl_events_list"]));
       const stderr = await waitForLine(() => link.stderr());
       expect(stderr.split(/\r?\n/).filter((line) => line !== "")).toEqual([
         `gripeventsctl mcp: config ${join(home, ".gripeventsctl.yaml")}, no config`,

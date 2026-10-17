@@ -9,7 +9,7 @@
  * terminal. Nothing here reaches the network: the agent refuses every connection.
  */
 
-import { GripError, type GripErrorKind, type Operation } from "@gripeventsctl/core";
+import { GripError, type GripErrorKind, OPERATIONS, type Operation } from "@gripeventsctl/core";
 import {
   type RunCliIo,
   type TempHome,
@@ -122,9 +122,17 @@ describe("[CAP-PARITY] [CAP-OUTPUT] the CLI builder: one leaf per operation by t
       expect(mustFind(groups[0], "the group").commands.map((command) => command.name())).toEqual(["echo", "poke"]);
     });
 
-    it("AC-19: buildProgram() with no argument still builds the auth-only program", () => {
+    it("AC-19: buildProgram() with no argument builds the program over the registry: auth, then one group per distinct registry group in registry order", () => {
       const program = buildProgram();
-      expect(program.commands.map((command) => command.name())).toEqual(["auth"]);
+      const groups = [...new Set(OPERATIONS.map((op) => op.group))];
+      expect(program.commands.map((command) => command.name())).toEqual(["auth", ...groups]);
+      for (const op of OPERATIONS) {
+        const group = program.commands.find((command) => command.name() === op.group);
+        expect(
+          group?.commands.map((command) => command.name()),
+          op.group,
+        ).toContain(op.verb);
+      }
     });
   });
 
