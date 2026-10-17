@@ -41,7 +41,7 @@ capabilities:
   - id: CAP-EVENTS
     description: events check and events list work as documented and never show the application token
     levels: [S]
-    status: planned
+    status: active
   - id: CAP-ATTENDEES
     description: List, dump and get send the documented shapes, report gated sets, stop correctly, and never cache
     levels: [S]

@@ -177,6 +177,22 @@ describe("[CAP-OUTPUT] [CAP-TERMINAL-ESCAPING] the output module: every form is 
       expect(escapeForTerminal(String.fromCodePoint(0x202e))).toBe("\\u{202e}");
     });
 
+    it("render.human replaces the generic form with the operation's own, escaped in place, and --json never uses it", () => {
+      const { sessionToken } = fixtureSecrets();
+      registerSecret(sessionToken);
+      const human = (output: unknown): string => `own form of ${JSON.stringify(output)}\x1b[2J\u202e`;
+      const output = { found: false, text: sessionToken };
+      expect(renderHuman(output, { render: { human }, tty: true, colour: true })).toBe(
+        `own form of ${JSON.stringify(output)}\\x1b[2J\\u{202e}`,
+      );
+      const written = new Capture();
+      writeOutput(output, { json: false, stdout: written, render: { human } });
+      expect(written.text).toBe(`own form of ${JSON.stringify({ ...output, text: "<REDACTED>" })}\\x1b[2J\\u{202e}\n`);
+      const json = new Capture();
+      writeOutput(output, { json: true, stdout: json, render: { human } });
+      expect(json.text).toBe(`${JSON.stringify({ ...output, text: "<REDACTED>" }, null, 2)}\n`);
+    });
+
     it("redactOutput passes every string value through redactString, at any depth, and leaves other values", () => {
       const { sessionToken } = fixtureSecrets();
       registerSecret(sessionToken);

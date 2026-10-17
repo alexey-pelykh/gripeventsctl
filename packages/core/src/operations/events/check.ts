@@ -80,9 +80,13 @@ export function projectConfigLookup(answer: ConfigLookup): EventsCheckOutput {
   };
 }
 
-/** One value of the human form: `null` written out, a string as it is, a nested value as compact JSON. */
-function humanValue(value: unknown): string {
+/**
+ * One value of the human form: `null` written out, a string as it is, a number or a boolean as its digits or word, and
+ * `type_permissions` as compact JSON whatever its shape, a string included, so the type set reads as the API sent it.
+ */
+function humanValue(key: keyof EventsCheckOutput, value: unknown): string {
   if (value === null || value === undefined) return "null";
+  if (key === "type_permissions") return JSON.stringify(value);
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return JSON.stringify(value);
@@ -94,7 +98,7 @@ function humanValue(value: unknown): string {
  */
 export function renderEventsCheck(output: EventsCheckOutput): string {
   if (!output.slug_found) return `slug_found: false\n${UNKNOWN_SLUG_SENTENCE}`;
-  return EVENTS_CHECK_KEYS.map((key) => `${key}: ${humanValue(output[key])}`).join("\n");
+  return EVENTS_CHECK_KEYS.map((key) => `${key}: ${humanValue(key, output[key])}`).join("\n");
 }
 
 export const eventsCheck = defineOperation({
