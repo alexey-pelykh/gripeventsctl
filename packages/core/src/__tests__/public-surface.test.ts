@@ -111,7 +111,8 @@ const VALUE_EXPORTS = [
   "resolveSessionToken",
   "saveConfig",
   "saveSession",
-  // operations/registry.ts (issue #9): the registry and its identity helper; the operation items fill the list.
+  // operations/registry.ts and operations/operation.ts (issue #9): the registry and its identity helper; the operation
+  // items fill the list.
   "OPERATIONS",
   "defineOperation",
   // config/op.ts

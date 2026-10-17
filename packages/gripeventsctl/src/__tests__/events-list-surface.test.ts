@@ -192,6 +192,7 @@ describe("[CAP-EVENTS] events list at the surface: the CLI leaf and the MCP twin
       expect(human.stdout).toBe("no active events\n");
       armContainers(() => containerList200([]));
       const machine = await runCli(["--json", "events", "list"], io(home));
+      expect(machine.exitCode, machine.stderr).toBe(0);
       expect(machine.stdout).toBe("[]\n");
       armContainers(() => containerList200([]));
       const result = await withServer(home, (link) => link.callTool(TOOL, {}));

@@ -26,8 +26,9 @@ interface Run {
 
 /**
  * The names `tools/list` answers. A server with no tool registered advertises no `tools` capability and answers
- * `tools/list` with "Method not found" (`@modelcontextprotocol/sdk` 1.32.1): that is the empty list, which the auth
- * item asserts holds no `gripeventsctl_auth_` tool; the parity gate item asserts the same against the full list.
+ * `tools/list` with "Method not found" (`@modelcontextprotocol/sdk` 1.32.1): that is the empty list. The registry
+ * holds the operation items' tools; the auth item asserts the list holds no `gripeventsctl_auth_` tool, and the
+ * parity gate asserts the same against the full list.
  */
 async function listToolNames(client: Client): Promise<string[]> {
   try {

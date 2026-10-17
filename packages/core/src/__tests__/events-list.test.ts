@@ -160,9 +160,13 @@ describe("[CAP-EVENTS] events list: the active containers of the session's appli
       const secrets = fixtureSecrets();
       await saveConfig(sessionConfig(secrets.sessionToken), { env: home.env });
       armContainers(() => success200([{ id: 1, name: "Test Event 1", format: "conference", has_joined: "yes" }]));
-      const error = await eventsList.run(await contextOf(home), {}).catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(ApiError);
-      expect((error as ApiError).message).toContain("has_joined");
+      const mistyped = await eventsList.run(await contextOf(home), {}).catch((e: unknown) => e);
+      expect(mistyped).toBeInstanceOf(ApiError);
+      expect((mistyped as ApiError).message).toContain("has_joined");
+      armContainers(() => success200([{ id: 1, name: "Test Event 1", has_joined: true }]));
+      const missing = await eventsList.run(await contextOf(home), {}).catch((e: unknown) => e);
+      expect(missing).toBeInstanceOf(ApiError);
+      expect((missing as ApiError).message).toContain("format");
     });
   });
 

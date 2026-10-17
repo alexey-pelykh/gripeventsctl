@@ -32,7 +32,7 @@ import {
 } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
-import { OPERATIONS } from "../../../core/dist/index.js";
+import { OPERATIONS, USER_AGENT } from "../../../core/dist/index.js";
 import { buildServer } from "../index.js";
 
 const agent = mockGrip();
@@ -183,8 +183,8 @@ describe("[CAP-EVENTS] events check <slug> at the surface: the CLI leaf and the 
           "",
         ].join("\n"),
       );
-      // stderr holds the transport's one diagnostic line per attempt (`GET config: 200`), never an error or a hint.
-      expect(result.stderr).not.toMatch(/error|hint|unknown/iu);
+      // stderr holds the transport's one diagnostic line per attempt and nothing else: no error, no hint.
+      expect(result.stderr.split("\n").filter((line) => line !== "")).toEqual(["GET config: 200"]);
 
       expect(calls().length - before).toBe(1);
       const call = calls().at(-1);
@@ -195,41 +195,56 @@ describe("[CAP-EVENTS] events check <slug> at the surface: the CLI leaf and the 
       const headers = lowerHeaders(call?.headers);
       expect(headers["authorization"]).toMatch(/^Bearer \S+$/);
       expect(headers["accept"]).toBe("application/json");
-      expect(headers["user-agent"]).toContain("Mozilla/");
+      expect(headers["user-agent"]).toBe(USER_AGENT);
       expect(headers).not.toHaveProperty("x-authorization");
     });
   });
 
-  it("AC-2: an empty display_name falls back to the container name and active 0 is false, in --json", async () => {
+  it("AC-2: an empty display_name falls back to the container name, not to the slug, and active 0 is false, in --json", async () => {
     await withTempHome(async (home) => {
       const secrets = fixtureSecrets();
-      armLookup("testevent2", () =>
-        configLookup200({ slug: "testevent2", displayName: "", active: 0, applicationToken: secrets.applicationToken }),
+      // The container name differs from the slug sent, so a fallback to the slug would fail here.
+      armLookup("Slug-2", () =>
+        success200({
+          container: { general: { display_name: "", name: "container-name-2", active: 0 } },
+          application: {
+            general: { application_name: "Example Org 1", application_id: 1, token: secrets.applicationToken },
+            permissions: { type_permissions: {} },
+          },
+        }),
       );
-      const result = await runCli(["--json", "events", "check", "testevent2"], io(home));
+      const result = await runCli(["--json", "events", "check", "Slug-2"], io(home));
       expect(result.exitCode, result.stderr).toBe(0);
       const json = JSON.parse(result.stdout) as Record<string, unknown>;
       expect(json["slug_found"]).toBe(true);
-      expect(json["display_name"]).toBe("testevent2");
-      expect(json["name"]).toBe("testevent2");
+      expect(json["display_name"]).toBe("container-name-2");
+      expect(json["name"]).toBe("container-name-2");
       expect(json["active"]).toBe(false);
     });
   });
 
-  it("AC-3, case 2: the documented 404 prints slug_found false and the sentence, exits 0 with an empty stderr, never says not on Grip, and --json carries null in every other field", async () => {
+  it("AC-3, case 2: the documented 404 prints slug_found false and the sentence, exits 0 with nothing but the transport's diagnostic line on stderr (the deviation of #70), never says not on Grip, and --json carries null in every other field", async () => {
     await withTempHome(async (home) => {
       armLookup("nosuchslug", () => configLookup404());
       const human = await runCli(["events", "check", "nosuchslug"], io(home));
       expect(human.exitCode).toBe(0);
       expect(human.stdout).toBe(`slug_found: false\n${UNKNOWN_SLUG_SENTENCE}\n`);
-      // No error and no hint on stderr: the transport's diagnostic line (`GET config: 404`) is all it carries.
-      expect(human.stderr).not.toMatch(/error|hint|unknown|slug/iu);
+      // The criterion says stderr is empty; the transport's one diagnostic line per attempt is all it carries, and no
+      // error, hint or "not on Grip" (issue #70 records the conflict).
+      expect(human.stderr.split("\n").filter((line) => line !== "")).toEqual(["GET config: 404"]);
       expect(human.stdout).not.toContain("not on Grip");
+
+      // The lookup is case-insensitive on the platform; an unknown slug in mixed case is sent as given and unknown.
+      armLookup("NoSuchSlug", () => configLookup404());
+      const mixed = await runCli(["events", "check", "NoSuchSlug"], io(home));
+      expect(mixed.exitCode).toBe(0);
+      expect(mixed.stdout).toBe(`slug_found: false\n${UNKNOWN_SLUG_SENTENCE}\n`);
+      expect(calls().at(-1)?.searchParams).toEqual({ container_name: "NoSuchSlug" });
 
       armLookup("nosuchslug", () => configLookup404());
       const machine = await runCli(["--json", "events", "check", "nosuchslug"], io(home));
       expect(machine.exitCode).toBe(0);
-      expect(machine.stderr).not.toMatch(/error|hint|unknown|slug/iu);
+      expect(machine.stderr.split("\n").filter((line) => line !== "")).toEqual(["GET config: 404"]);
       expect(JSON.parse(machine.stdout)).toStrictEqual({
         slug_found: false,
         display_name: null,
@@ -294,6 +309,9 @@ describe("[CAP-EVENTS] events check <slug> at the surface: the CLI leaf and the 
         expect(occurrences(body, marker), `${form} holds the planted value`).toBe(0);
         expect(body, `${form} names a token`).not.toContain("token");
       }
+      // Each form holds the result, so the zero-occurrence checks above ran over text, not over an empty string.
+      expect(human.stdout).toContain("slug_found: true\n");
+      expect(textOf(result)).toContain("slug_found: true\n");
       const json: unknown = JSON.parse(machine.stdout);
       expect(hasKeyDeep(json, "token")).toBe(false);
       expect(hasKeyDeep(result.structuredContent, "token")).toBe(false);
@@ -331,11 +349,23 @@ describe("[CAP-EVENTS] events check <slug> at the surface: the CLI leaf and the 
   it("AC-6: type_permissions of any JSON shape reaches --json and structuredContent as sent, and the human form prints it as compact JSON", async () => {
     await withTempHome(async (home) => {
       const secrets = fixtureSecrets();
-      const shapes: unknown[] = [[{ id: 1, name: "Attendee" }], { "1": { name: "Attendee" } }, "text", 5, [], {}];
+      const shapes: unknown[] = [
+        [{ id: 1, name: "Attendee" }],
+        { "1": { name: "Attendee" } },
+        { zebra: 1, alpha: [2, 1], mid: { b: true, a: false } },
+        "text",
+        5,
+        false,
+        [],
+        {},
+      ];
       for (const shape of shapes) {
         armLookup("testevent1", () => testEvent1(secrets, shape));
         const machine = await runCli(["--json", "events", "check", "testevent1"], io(home));
-        expect((JSON.parse(machine.stdout) as Record<string, unknown>)["type_permissions"]).toStrictEqual(shape);
+        const sent = (JSON.parse(machine.stdout) as Record<string, unknown>)["type_permissions"];
+        expect(sent).toStrictEqual(shape);
+        // Deep equality does not see key order; the serialised forms do.
+        expect(JSON.stringify(sent)).toBe(JSON.stringify(shape));
         armLookup("testevent1", () => testEvent1(secrets, shape));
         const result = await withServer(home, (link) => link.callTool(TOOL, { slug: "testevent1" }));
         expect(result.isError).toBeFalsy();
