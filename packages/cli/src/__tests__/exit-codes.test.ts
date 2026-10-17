@@ -121,7 +121,10 @@ describe("[CAP-AUTH] the exit-code table and the error printer", () => {
   });
 
   it("a value typed in the wrong place, an extra positional or an unknown command, is never echoed by a usage error", async () => {
-    const { password } = fixtureSecrets();
+    // A base64url value can start with `-`, which Commander reads as an option name rather than a positional, and
+    // then echoes in its `unknown option` error (#67). The prefix keeps every run on the three cases this test is
+    // about (#53).
+    const password = `p${fixtureSecrets().password}`;
     const io = { terminal: fakeTerminal().terminal, dispatcher: undefined, clock: fakeClock(), env: process.env };
     const extraPositional = await runCli(["auth", "signin", "test-event-1", password], io);
     expect(extraPositional.exitCode).toBe(2);
