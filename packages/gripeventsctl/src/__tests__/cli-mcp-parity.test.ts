@@ -9,8 +9,16 @@
  * `needsSession: true` tool answers `no-session` without a request, and a read call writes nothing (AC-12, AC-14,
  * AC-15, AC-16). The checker is a function of this file, so a stale or reasonless exemption can be injected (step 11).
  *
- * The set-equality check and the description check run at every later item automatically; the assertion that the
- * set equals the named v1 tool list lands with the last operation item.
+ * The gate (steps 1 to 7 and 10) builds the program and the server over the registry `OPERATIONS` followed by the
+ * synthetic operation, so every entry a later item adds to the registry is examined here automatically, beside the
+ * one operation that exists before any item lands; the expected leaves and tools are derived from the registry and
+ * the synthetic entries, never written out. The temporary-home checks (steps 8 and 9) and the injected exemptions
+ * (step 11) stay over the synthetic operation alone. The assertion that the set equals the named v1 tool list lands
+ * with the last operation item.
+ *
+ * `OPERATIONS` is read from core's built entry by its place in the repository, as `runCli` of `@gripeventsctl/testing`
+ * loads the CLI's: this package declares no dependency on core, and the built entry is the module the two builders
+ * load, so the gate reads the same registry they do. `pnpm test` builds first.
  */
 
 import { existsSync } from "node:fs";
@@ -32,6 +40,7 @@ import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
+import { OPERATIONS, type Operation } from "../../../core/dist/index.js";
 import { syntheticOperation } from "../../../core/src/__tests__/fixtures/synthetic-operation.js";
 import { buildProgram, buildServer } from "../index.js";
 
@@ -144,6 +153,29 @@ export function checkParity({ leaves, tools, exemptions }: ParityInput): string[
   return findings;
 }
 
+/** The three CLI-only leaves of the `auth` group: the standing `cli_only` set of `.mcp-exempt.yaml`. */
+const AUTH_LEAVES = ["auth signin", "auth signout", "auth status"];
+
+/** The CLI leaf `<group> <verb>` of an operation. */
+function leafOf(op: Pick<Operation, "group" | "verb">): string {
+  return `${op.group} ${op.verb}`;
+}
+
+/** The MCP tool `gripeventsctl_<group>_<verb>` of an operation. */
+function toolOf(op: Pick<Operation, "group" | "verb">): string {
+  return `gripeventsctl_${op.group}_${op.verb}`;
+}
+
+/** The operations the gate builds over: the registry, then the synthetic operation, then `extra` (AC-15's write twin). */
+function gateOperations(...extra: readonly Operation[]): Operation[] {
+  return [...OPERATIONS, syntheticOperation(), ...extra];
+}
+
+/** `names` in sorted order: a comparison as sets (step 4) that still reports a duplicate. */
+function sorted(names: readonly string[]): string[] {
+  return [...names].sort();
+}
+
 /** The banned input keys: a password, a token, or a file path to the config. */
 const BANNED_INPUT_KEYS = ["password", "token", "config_path", "config"];
 
@@ -155,7 +187,7 @@ const WRITE_BOUNDARY = "Only the user's own request justifies a call.";
 
 async function withServer<T>(
   env: NodeJS.ProcessEnv,
-  operations: unknown[],
+  operations: readonly Operation[],
   fn: (l: McpLink) => Promise<T>,
 ): Promise<T> {
   const l = await linkMcp(
@@ -169,18 +201,35 @@ async function withServer<T>(
 }
 
 describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the exemptions of .mcp-exempt.yaml", () => {
-  const operations = [syntheticOperation()];
+  /** The synthetic operation alone: steps 8 and 9 need one operation, not the registry. */
+  const syntheticOnly = [syntheticOperation()];
 
-  it("AC-14: the real command tree, the real tools/list answer and .mcp-exempt.yaml pass the gate, with the auth group and the synthetic operation", async () => {
+  it("AC-14: the real command tree, the real tools/list answer and .mcp-exempt.yaml pass the gate, with the auth group, every registry entry and the synthetic operation", async () => {
     await withTempHome(async (home) => {
+      const operations = gateOperations();
       const leaves = leavesOf(buildProgram({ operations }));
-      expect(leaves).toEqual(["auth signin", "auth signout", "auth status", "synthetic echo"]);
+      expect(sorted(leaves)).toEqual(sorted([...AUTH_LEAVES, ...OPERATIONS.map(leafOf), "synthetic echo"]));
       const tools = await withServer(home.env, operations, async (l) => (await l.listTools()).map((tool) => tool.name));
-      expect(tools).toEqual(["gripeventsctl_synthetic_echo"]);
+      expect(sorted(tools)).toEqual(sorted([...OPERATIONS.map(toolOf), "gripeventsctl_synthetic_echo"]));
       const exemptions = await readExemptions();
-      expect(exemptions.cli_only.map((entry) => entry.command)).toEqual(["auth signin", "auth signout", "auth status"]);
+      expect(exemptions.cli_only.map((entry) => entry.command)).toEqual(AUTH_LEAVES);
       expect(exemptions.mcp_only).toEqual([]);
       expect(checkParity({ leaves, tools, exemptions })).toEqual([]);
+    });
+  });
+
+  it("AC-14: the gate's builders see every registry entry: the operations list holds each OPERATIONS entry itself, in registry order, and the leaf set and the tool set hold its names, beside the synthetic operation", async () => {
+    await withTempHome(async (home) => {
+      const operations = gateOperations();
+      const leaves = leavesOf(buildProgram({ operations }));
+      const tools = await withServer(home.env, operations, async (l) => (await l.listTools()).map((tool) => tool.name));
+      for (const [index, op] of OPERATIONS.entries()) {
+        expect(operations[index], leafOf(op)).toBe(op);
+        expect(leaves).toContain(leafOf(op));
+        expect(tools).toContain(toolOf(op));
+      }
+      expect(leaves).toContain("synthetic echo");
+      expect(tools).toContain("gripeventsctl_synthetic_echo");
     });
   });
 
@@ -219,15 +268,20 @@ describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the
   });
 
   it("AC-14: the program has no `mcp` command: the umbrella intercepts it before Commander parses argv", () => {
-    expect(buildProgram({ operations }).commands.map((command) => command.name())).not.toContain("mcp");
+    expect(buildProgram({ operations: gateOperations() }).commands.map((command) => command.name())).not.toContain(
+      "mcp",
+    );
   });
 
   it("AC-15: no input schema names password, token, config_path or config; every read tool carries the two read sentences and { readOnlyHint: true }; every write tool the two write sentences and the destructive and open-world hints", async () => {
     await withTempHome(async (home) => {
-      const both = [syntheticOperation(), syntheticOperation({ verb: "poke", kind: "write" })];
-      await withServer(home.env, both, async (l) => {
+      const write = syntheticOperation({ verb: "poke", kind: "write" });
+      const operations = gateOperations(write);
+      await withServer(home.env, operations, async (l) => {
         const tools = await l.listTools();
-        expect(tools.length).toBeGreaterThan(0);
+        expect(sorted(tools.map((tool) => tool.name))).toEqual(
+          sorted([...OPERATIONS.map(toolOf), "gripeventsctl_synthetic_echo", toolOf(write)]),
+        );
         for (const tool of tools) {
           const properties = Object.keys(
             (tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {},
@@ -235,19 +289,26 @@ describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the
           for (const banned of BANNED_INPUT_KEYS) expect(properties, tool.name).not.toContain(banned);
           const description = tool.description ?? "";
           if (tool.annotations?.readOnlyHint === true) {
-            expect(description).toContain(READ_POSTURE);
-            expect(description).toContain(READ_BOUNDARY);
-            expect(tool.annotations).toEqual({ readOnlyHint: true });
+            expect(description, tool.name).toContain(READ_POSTURE);
+            expect(description, tool.name).toContain(READ_BOUNDARY);
+            expect(tool.annotations, tool.name).toEqual({ readOnlyHint: true });
           } else {
-            expect(description).toContain(WRITE_POSTURE);
-            expect(description).toContain(WRITE_BOUNDARY);
-            expect(tool.annotations?.destructiveHint).toBe(true);
-            expect(tool.annotations?.openWorldHint).toBe(true);
+            expect(description, tool.name).toContain(WRITE_POSTURE);
+            expect(description, tool.name).toContain(WRITE_BOUNDARY);
+            expect(tool.annotations?.destructiveHint, tool.name).toBe(true);
+            expect(tool.annotations?.openWorldHint, tool.name).toBe(true);
           }
         }
-        expect(tools.filter((tool) => tool.annotations?.readOnlyHint === true).map((tool) => tool.name)).toEqual([
-          "gripeventsctl_synthetic_echo",
-        ]);
+        // Each branch above ran over every tool of its kind: the reads are the registry's reads and the synthetic
+        // echo, the writes are the registry's writes and the synthetic poke.
+        const reads = tools.filter((tool) => tool.annotations?.readOnlyHint === true).map((tool) => tool.name);
+        const writes = tools.filter((tool) => tool.annotations?.readOnlyHint !== true).map((tool) => tool.name);
+        expect(sorted(reads)).toEqual(
+          sorted([...OPERATIONS.filter((op) => op.kind === "read").map(toolOf), "gripeventsctl_synthetic_echo"]),
+        );
+        expect(sorted(writes)).toEqual(
+          sorted([...OPERATIONS.filter((op) => op.kind === "write").map(toolOf), toolOf(write)]),
+        );
       });
     });
   });
@@ -291,7 +352,7 @@ describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the
   it("AC-16: a read tool call over the synthetic operation leaves no new file in the temporary home", async () => {
     await withTempHome(async (home) => {
       const before = (await readdir(home.dir)).sort();
-      const result = await withServer(home.env, operations, (l) =>
+      const result = await withServer(home.env, syntheticOnly, (l) =>
         l.callTool("gripeventsctl_synthetic_echo", { thing_id: 42, type_ids: [1] }),
       );
       expect(result.isError).toBeFalsy();
