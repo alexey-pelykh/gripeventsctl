@@ -2,10 +2,10 @@
 // Copyright (C) 2026 Oleksii PELYKH
 
 export {
-  OPERATIONS,
   type Operation,
   type OperationContext,
   type OperationKind,
   type RequestShape,
   defineOperation,
-} from "./registry.js";
+} from "./operation.js";
+export { OPERATIONS } from "./registry.js";
