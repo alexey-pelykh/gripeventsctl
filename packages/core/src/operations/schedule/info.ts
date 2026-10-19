@@ -46,7 +46,7 @@ export const scheduleEntryRecord = z.object({
   location: z.string().nullable().default(null),
   /** Empty where the entry carries none. */
   attendees: z.array(scheduleAttendeeRecord).default(() => []),
-  /** The thing id of the person who asked for the meeting; not recorded for an agenda session. */
+  /** The thing id of the person who asked for the meeting; the page leaves open whether an agenda session carries one. */
   requestor_id: z.number().int().nullable().default(null),
   /** The note sent with the request. */
   message: z.string().nullable().default(null),
