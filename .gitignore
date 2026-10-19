@@ -1,5 +1,11 @@
 ## Project-specific
 .gripeventsctl.yaml
+# The user's own records: the send log, the go-ahead journal, the write lock, the config and anything
+# derived from its name. Each holds personal data and must never be committed.
+*.send-log.jsonl
+*.go-aheads.jsonl
+*.write.lock
+.gripeventsctl*
 *.local.*
 build/
 .tmp/
