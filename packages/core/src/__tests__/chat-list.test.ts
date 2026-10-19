@@ -136,11 +136,13 @@ describe("[CAP-CHAT-READ] chat list: one GET of chat/latest with the container i
     }
   });
 
-  it("is the seventh registry entry, after the match entry and before chat thread: a read with a session, no input, one GET to chat-and-meetings.md § Chat threads, and the section heading exists on the page", async () => {
+  it("is the seventh registry entry, after the match entry and before chat thread and chat send: a read with a session, no input, one GET to chat-and-meetings.md § Chat threads, and the section heading exists on the page", async () => {
     expect(OPERATIONS[6]).toBe(chatList);
     expect(OPERATIONS[7]).toBe(chatThread);
+    expect(OPERATIONS[8]?.group).toBe("chat");
+    expect(OPERATIONS[8]?.verb).toBe("send");
     expect(OPERATIONS[5]?.group).toBe("match");
-    expect(OPERATIONS.slice(8).map((op) => op.group)).not.toContain("chat");
+    expect(OPERATIONS.slice(9).map((op) => op.group)).not.toContain("chat");
     expect(chatList.group).toBe("chat");
     expect(chatList.verb).toBe("list");
     expect(chatList.kind).toBe("read");
