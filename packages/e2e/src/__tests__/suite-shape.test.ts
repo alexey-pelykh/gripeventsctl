@@ -72,10 +72,16 @@ describe("[CAP-E2E] the rules over the live files and the workflows", () => {
     }
   });
 
-  it("names a tenth live file and a missing one", () => {
+  it("names a tenth live file, at the top level or nested where the live config would collect it, and a missing one", () => {
     const extra = cleanTree();
     extra.set(`${LIVE_DIR}80-extra.e2e.test.ts`, HEADER);
     expect(shapeFindings(extra)).toEqual([`${LIVE_DIR}80-extra.e2e.test.ts: not one of the nine live file names`]);
+    const nested = cleanTree();
+    nested.set(`${LIVE_DIR}__tests__/80-nested.e2e.test.ts`, `${HEADER}callTool("gripeventsctl_attendees_dump", {})\n`);
+    expect(shapeFindings(nested)).toEqual([
+      `${LIVE_DIR}__tests__/80-nested.e2e.test.ts: not one of the nine live file names`,
+      `${LIVE_DIR}__tests__/80-nested.e2e.test.ts: names attendees_dump; the suite never dumps`,
+    ]);
     const missing = cleanTree();
     missing.delete(`${LIVE_DIR}30-match.e2e.test.ts`);
     expect(shapeFindings(missing)).toEqual([
@@ -96,6 +102,7 @@ describe("[CAP-E2E] the rules over the live files and the workflows", () => {
   it("reads only the tracked files under the two directories", () => {
     expect(isLiveFile(`${LIVE_DIR}00-session.e2e.test.ts`)).toBe(true);
     expect(isLiveFile(`${LIVE_DIR}__tests__/summary.test.ts`)).toBe(false);
+    expect(isLiveFile(`${LIVE_DIR}__tests__/80-nested.e2e.test.ts`)).toBe(true);
     expect(isLiveFile(`${LIVE_DIR}lib/outcome.ts`)).toBe(false);
     expect(isLiveFile("packages/core/src/x.e2e.test.ts")).toBe(false);
   });

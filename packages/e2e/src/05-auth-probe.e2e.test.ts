@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-import { GripClient, GripError } from "@gripeventsctl/core";
+import { GripClient, GripError, redactString } from "@gripeventsctl/core";
 import { afterAll, beforeAll, describe, it } from "vitest";
 
 import { type LiveFixture, openLive, requestShapes } from "./lib/live-check.js";
@@ -84,7 +84,9 @@ describe("[CAP-E2E] 05-auth-probe: a wrong token on a read", () => {
     }
     process.stderr.write(`${summaryLine(FILE, outcome, SHAPE.method, SHAPE.pathTemplate, status, runDate())}\n`);
     process.stderr.write(
-      `${FILE}: HTTP ${status === "-" ? "-" : String(status)} classified ${kind}; body excerpt ${excerpt ? "present" : "absent"}\n`,
+      redactString(
+        `${FILE}: HTTP ${status === "-" ? "-" : String(status)} classified ${kind}; body excerpt ${excerpt ? "present" : "absent"}\n`,
+      ),
     );
     if (!before.equals(after)) drift("the config file changed during the probe");
     if (outcome === "inconclusive") inconclusive(ctx, reason);

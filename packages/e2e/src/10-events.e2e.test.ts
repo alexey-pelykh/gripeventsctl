@@ -3,10 +3,12 @@
 
 /**
  * 10-events (issue #18 § The nine files, item 3): `events check` with the session's slug and `events
- * list`, through the live server. The pull request records on `docs/api/containers.md` § Fields of a
- * 200 answer which keys of `type_permissions` carry the type id and the name, if the run shows them.
+ * list`, through the live server. The first test prints the top-level key names of `type_permissions`
+ * (an all-digit key as `<digits>`, never a value), so the pull request can record on
+ * `docs/api/containers.md` § Fields of a 200 answer which keys carry the type id and the name.
  */
 
+import { redactString } from "@gripeventsctl/core";
 import { afterAll, beforeAll, describe, it } from "vitest";
 
 import { type LiveFixture, checkedCall, openLive } from "./lib/live-check.js";
@@ -36,6 +38,11 @@ describe("[CAP-E2E] 10-events: events check and events list", () => {
     if (content["slug_found"] !== true) drift("slug_found is not true for the session's slug");
     const bad = typeMismatches(content, { display_name: "string", active: "boolean", type_permissions: "present" });
     if (bad.length > 0) drift(`fields with another type than documented: ${bad.join(", ")}`);
+    const permissions = content["type_permissions"];
+    const keys = isRecord(permissions)
+      ? Object.keys(permissions).map((key) => (/^\d+$/u.test(key) ? "<digits>" : key))
+      : [`<${Array.isArray(permissions) ? "array" : typeof permissions}>`];
+    process.stderr.write(redactString(`${FILE}: type_permissions keys: ${keys.join(", ")}\n`));
   });
 
   it("events list holds an entry whose id is the session's container", async (ctx) => {
