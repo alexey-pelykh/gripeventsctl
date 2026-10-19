@@ -48,7 +48,7 @@ Requires Node.js 22.19.0 or newer.
 
 ## MCP Integration
 
-`gripeventsctl mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio. Each CLI command gets a twin MCP tool named `gripeventsctl_<group>_<verb>`. The exceptions are `auth signin`, `auth signout` and `auth status`, which are CLI-only.
+`gripeventsctl mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio. Each CLI command gets a twin MCP tool named `gripeventsctl_<group>_<verb>`. The exceptions are the `auth` group (`auth signin`, `auth signout`, `auth status`) and `writes go-ahead`, which are CLI-only.
 
 <details>
 <summary><b>Claude Code</b></summary>
