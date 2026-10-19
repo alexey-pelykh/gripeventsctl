@@ -22,9 +22,10 @@ jobs:
   # moving version stamping before validation.
   #
   # The checkout is a full clone (fetch-depth: 0): the history scan of the
-  # secret-leakage lint reads every blob reachable from every ref, and over the
-  # one commit a shallow clone holds it would pass on nothing. The strict modes
-  # run here and nowhere else: every docs/api/ page dated, no planned capability
+  # secret-leakage lint reads every blob reachable from every ref (outside the
+  # tree scan's path exclusions and under 1 MiB), and it refuses to run on the
+  # one commit a shallow clone holds. The strict modes run here and before a
+  # tag, never in `pnpm lint`: every docs/api/ page dated, no planned capability
   # left in the catalog, and every oracle file's subject built (the strict oracle
   # run fails on a missing subject where `pnpm test` would skip it).
   validate:
@@ -222,10 +223,10 @@ jobs:
       #
       # This loop enumerates the published-package set by package name —
       # identical (same names, same order) to the provenance-verification
-      # step below. The set also appears three more times in this job by
-      # directory path (verify-stamped-versions, pack tarballs, generate
-      # SBOMs). Adding a new published package requires updating all five
-      # sites.
+      # step below. The set also appears by directory path in this job
+      # (verify-stamped-versions, pack tarballs) and in the `sbom` job's
+      # generate step. Adding a new published package requires updating all
+      # five sites.
       #
       # The `npm view` skip guard exits 0 only when the version is already
       # on the registry. Any other failure mode (transient network, registry
@@ -341,7 +342,12 @@ jobs:
     permissions:
       contents: write # gh release upload (SBOM assets)
     steps:
+      # The job token is not written into .git/config: nothing here needs git
+      # credentials (`gh release upload` reads GH_TOKEN), and the third-party
+      # generator installed below must not find a write token on disk.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup
 
       - name: Derive version from tag
@@ -420,8 +426,12 @@ jobs:
   # against a SHA-256 written here; a later bump changes the two constants
   # together (the digest comes from `sha256sum` over the downloaded asset).
   # The job runs for a prerelease tag too, so the rehearsal exercises it. A
-  # failure here after a successful npm publish is fixed forward and the
-  # workflow re-run against the same tag: the npm loop skips what is published.
+  # failure here after a successful npm publish, for a cause outside the
+  # repository (the registry down, a transient download error), is recovered by
+  # re-running the workflow against the same tag: a re-run reuses the tag's
+  # commit, and the npm loop skips what is published. A cause inside the
+  # repository (a wrong digest, a manifest the registry rejects) needs a fix
+  # and a new tag, because a re-run never sees a later commit.
   publish-mcp-registry:
     name: Publish to MCP registry
     timeout-minutes: 10
@@ -431,7 +441,10 @@ jobs:
       contents: read
       id-token: write # mcp-publisher login github-oidc
     steps:
+      # No git credential on disk: the job reads server.json and never pushes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Stamp server.json
         env:
@@ -457,7 +470,8 @@ jobs:
           echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum -c -
           tar xzf mcp-publisher.tar.gz mcp-publisher
 
+      - name: Log in to the MCP registry with the job's OIDC token
+        run: ./mcp-publisher login github-oidc
+
       - name: Publish server.json to the MCP registry
-        run: |
-          ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+        run: ./mcp-publisher publish
