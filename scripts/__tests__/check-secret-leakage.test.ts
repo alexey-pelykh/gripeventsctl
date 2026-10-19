@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SCRIPT = fileURLToPath(new URL("../check-secret-leakage.ts", import.meta.url));
@@ -425,6 +425,11 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
 
   it("R29: with --history, flags a session token a later commit deleted, naming the blob, the path and the commit that introduced it, never the value", () => {
     const { sessionToken } = fixtureSecrets();
+    // An unrelated first commit, so the introducing commit is neither the root nor the tip: a scan that named either
+    // by position would fail the assertion below.
+    write("README.md", "# Fixtures\n");
+    commitAll();
+    const root = gitOutput(["rev-parse", "HEAD"]);
     write("fixtures/capture.json", `{"user_token": "${sessionToken}"}\n`);
     commitAll();
     const introducing = gitOutput(["rev-parse", "HEAD"]);
@@ -448,31 +453,41 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     for (let start = 0; start + RUN <= sessionToken.length; start += 1) {
       expect(prefix, `${line} holds a run of the session token`).not.toContain(sessionToken.slice(start, start + RUN));
     }
-    expect(gitOutput(["rev-list", "--max-parents=0", "HEAD"])).toBe(introducing);
+    expect(introducing).not.toBe(root);
+    expect(introducing).not.toBe(gitOutput(["rev-parse", "HEAD"]));
     expect(result.stderr).toContain(`history: blob ${blob} first introduced by commit ${introducing}\n`);
+    expect(result.stderr).not.toContain(`first introduced by commit ${root}`);
     expect(result.stderr).toContain("FAIL: found 1 secret-shaped value(s) in the git history");
     expect(result.stderr).not.toContain(sessionToken);
     expect(result.stdout).not.toContain(sessionToken);
   });
 
-  it("R30: with --history on a shallow clone, refuses with the fetch-depth message, exits 2 and reports no history finding", () => {
-    const { sessionToken } = fixtureSecrets();
+  it("R30: with --history on a shallow clone, scans the tree, then refuses with the fetch-depth message, exits 2 and scans no history", () => {
+    const { sessionToken, chatToken } = fixtureSecrets();
+    // One token deleted before the tip, one still at the tip: the shallow clone holds the second in its tree and its
+    // one commit, so a history pass that ran anyway would print a `history:` line for it.
     write("fixtures/capture.json", `{"user_token": "${sessionToken}"}\n`);
     commitAll();
     git("rm", "-q", "fixtures/capture.json");
-    git("commit", "-q", "-m", "drop the capture");
+    write("fixtures/kept.txt", `token=${chatToken}\n`);
+    commitAll();
     const clone = mkdtempSync(join(tmpdir(), "gripeventsctl-leakage-shallow-"));
     try {
       // The file:// form is what makes --depth apply to a local clone; a plain path copies the whole repository.
-      execFileSync("git", ["clone", "-q", "--depth", "1", `file://${repo}`, clone], { stdio: "ignore" });
+      execFileSync("git", ["clone", "-q", "--depth", "1", pathToFileURL(repo).href, clone], { stdio: "ignore" });
       expect(gitOutput(["rev-parse", "--is-shallow-repository"], clone)).toBe("true");
 
       const result = runCheck(["--history"], clone);
 
       expect(result.status).toBe(2);
+      // The tree scan runs first and flags the kept token; the history pass then refuses and prints nothing of its own.
+      expect(result.stderr).toMatch(
+        /^fixtures\/kept\.txt:1: secret-shaped value \[a JWT, such as the chat token\]: /mu,
+      );
       expect(result.stderr).toContain("history scan needs a full clone (fetch-depth: 0)\n");
       expect(result.stderr).not.toMatch(/^history: /mu);
       expect(result.stderr).not.toContain(sessionToken);
+      expect(result.stderr).not.toContain(chatToken);
     } finally {
       rmSync(clone, { recursive: true, force: true });
     }

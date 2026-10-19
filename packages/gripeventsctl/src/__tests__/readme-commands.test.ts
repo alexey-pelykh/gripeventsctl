@@ -43,11 +43,13 @@ describe("[CAP-PARITY] README § Commands lists every leaf command buildProgram(
     const readme = await readFile(join(repositoryRoot(), "README.md"), "utf8");
     const section = commandsSection(readme);
 
+    // Every table body row counts: a row whose first cell is not one backticked command fails here, so a command
+    // written without backticks cannot slip past the comparison below.
     const tableCommands = section
-      .filter((line) => line.startsWith("| `"))
+      .filter((line) => line.startsWith("|") && !line.startsWith("| Command") && !line.startsWith("| -"))
       .map((line) => {
-        const cell = /^\| `([^`]+)`/u.exec(line)?.[1];
-        expect(cell, line).toBeDefined();
+        const cell = /^\| `([^`]+)` +\|/u.exec(line)?.[1];
+        expect(cell, `a table row whose first cell is one backticked command: ${line}`).toBeDefined();
         return leafOfSpan(cell ?? "");
       });
     const authLine = section.find((line) => line.startsWith("Auth commands:"));
