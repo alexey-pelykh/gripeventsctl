@@ -453,10 +453,17 @@ describe("[CAP-RELEASE] the rule table and the package spec reader", () => {
     for (const rule of RULES) expect(rule.description.length).toBeGreaterThan(0);
   });
 
-  it("R19: an exact version passes and a range, a tag, an x component or no version fails", () => {
+  it("R19: an exact version passes and a range, a tag, an x component, a partial version or no version fails", () => {
     expect(packageSpecProblem("npm@11.6.0")).toBeUndefined();
     expect(packageSpecProblem("@cyclonedx/cdxgen@12.3.3")).toBeUndefined();
     expect(packageSpecProblem("example-tool@1.0.0-rc.1")).toBeUndefined();
+    expect(packageSpecProblem("example-tool@1.0.0-next.1")).toBeUndefined();
+    expect(packageSpecProblem("example-tool@1.0.0+build.5")).toBeUndefined();
+    expect(packageSpecProblem("npm@next")).toBe("version next is not exact");
+    expect(packageSpecProblem("npm@beta")).toBe("version beta is not exact");
+    expect(packageSpecProblem("npm@12")).toBe("version 12 is not exact");
+    expect(packageSpecProblem("npm@12.2")).toBe("version 12.2 is not exact");
+    expect(packageSpecProblem("npm@v12.2.0")).toBe("version v12.2.0 is not exact");
     expect(packageSpecProblem("npm@>=11.5.1")).toBe("version >=11.5.1 is not exact");
     expect(packageSpecProblem("npm@^11.5.1")).toBe("version ^11.5.1 is not exact");
     expect(packageSpecProblem("npm@~11.5.1")).toBe("version ~11.5.1 is not exact");

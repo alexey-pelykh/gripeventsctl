@@ -15,8 +15,9 @@
  *      not `./<local path>` and does not match `<owner>/<repo>(/<path>)?@<40 lowercase hex>`.
  *   2. In a job holding `id-token: write`: a `run:` step that installs or runs a package without an
  *      exact version: `npm install -g`, `npm i -g`, `npx` or `pnpm dlx` followed by a package spec
- *      with no version, or whose version contains `^`, `~`, `>`, `<`, `*`, `latest` or an `x`
- *      component (`1.x`). Quotes are stripped first, so `"npm@>=11.5.1"` and `npm@>=11.5.1` read
+ *      with no version, or whose version is not one semver version (`11.6.0`, `1.0.0-rc.1`): a range
+ *      (`^`, `~`, `>`, `<`, `*`, an `x` component such as `1.x`), a dist-tag (`latest`, `next`) or a
+ *      partial version (`12`). Quotes are stripped first, so `"npm@>=11.5.1"` and `npm@>=11.5.1` read
  *      alike. `npx` and `pnpm dlx` take one spec, `npm install -g` every spec up to the end of the
  *      command; tokens starting with `-` are flags and skipped.
  *   3. In a job holding `id-token: write`: a `run:` step that mentions `cdxgen`.
@@ -256,11 +257,15 @@ export function packageSpecProblem(spec: string): string | undefined {
   const at = spec.indexOf("@", from);
   if (at === -1 || at === spec.length - 1) return "missing a version";
   const version = spec.slice(at + 1);
-  if (/[\^~<>*]/u.test(version) || /(?:^|\.)[xX](?=$|\.)/u.test(version) || version.includes("latest")) {
-    return `version ${version} is not exact`;
-  }
+  // Exact means one semver version: major.minor.patch with an optional prerelease and build part. Every form the rule
+  // lists fails this (a range marker, an `x` component, `latest`), and so does any other dist-tag (`next`, `beta`) or
+  // a partial version (`12`, `12.2`), which npm resolves at run time just as a range would.
+  if (!EXACT_VERSION.test(version)) return `version ${version} is not exact`;
   return undefined;
 }
+
+/** One exact semver version: `11.6.0`, `1.0.0-rc.1`, `1.0.0+build.5`. */
+const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
 /** `npm install -g`, `npm i -g`, `npx` or `pnpm dlx` as a command, not inside a longer word. */
 const INSTALL_COMMAND = /(?<![\w.-])(npm\s+(?:install|i)\s+-g|npx|pnpm\s+dlx)(?=\s|$)/gu;
