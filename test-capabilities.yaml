@@ -61,7 +61,7 @@ capabilities:
   - id: CAP-CHAT-READ
     description: chat list and chat thread read the documented paths with no side effect
     levels: [S]
-    status: planned
+    status: active
   - id: CAP-SCHEDULE
     description: schedule info reads the documented path and passes unlisted values through
     levels: [S]
