@@ -7,14 +7,17 @@
  * them over the tracked tree and over a copy with one rule broken. Each finding names the file and the
  * rule. The rules:
  *
- * - every `packages/e2e/src/*.e2e.test.ts` is one of the nine names, and the nine exist;
+ * - every `*.e2e.test.ts` under `packages/e2e/src/`, at any depth (the live config collects
+ *   `src/**\/*.e2e.test.ts`), is one of the nine names at the top level, and the nine exist;
  * - only `60-write.e2e.test.ts` names a write tool, a write kind or `match_manual`; `70-mcp-stdio`
  *   reads the expected tool list from `lib/write-operations.ts` and never spells a write name;
  * - no live file names `attendees_dump`;
  * - no live file holds an integer literal of four or more digits outside the two header lines, the
  *   string `matchmaking.grip.events/`, or `container_id:` followed by a digit (the no-event rule);
- * - no live file writes a file, names `--out`, holds a `password` literal, or fails a test except
- *   through the harness (`drift()`), which redacts (the README's safety policy, made mechanical);
+ * - no live file writes a file, names `--out`, holds a `password` literal, or spells `expect.fail(` or
+ *   `throw new Error(`, the two raw failure forms, so a failure goes through the harness's `drift()`,
+ *   which redacts (the README's safety policy, made mechanical; the rules are string scans of each
+ *   live file's own text, and a reviewer still reads the files for what a scan cannot see);
  * - no workflow under `.github/workflows/` sets `GRIPEVENTSCTL_E2E`, runs `test:e2e` or references a
  *   secret other than `secrets.GITHUB_TOKEN`.
  */
@@ -58,8 +61,9 @@ const FILE_WRITES = [
 /** Failures outside the harness: `drift()` is the one path, and it redacts. */
 const RAW_FAILURES = ["expect.fail(", "throw new Error("];
 
+/** True for every `*.e2e.test.ts` under the live directory, at any depth: what the live config collects. */
 export function isLiveFile(path: string): boolean {
-  return path.startsWith(LIVE_DIR) && path.endsWith(".e2e.test.ts") && !path.slice(LIVE_DIR.length).includes("/");
+  return path.startsWith(LIVE_DIR) && path.endsWith(".e2e.test.ts");
 }
 
 /** `source` without its two header lines, where they open it, so the copyright year never counts as an integer literal. */

@@ -5,16 +5,22 @@
  * 70-mcp-stdio (issue #18 § The nine files, item 9): the built binary as `gripeventsctl mcp` over real
  * stdio on the real home, so the child reads the maintainer's config exactly as a host's child would.
  * The tool list is the v1 set (`lib/write-operations.ts`), one read answers, the child's stderr opens
- * with the start line naming the config path, and `close()` ends the child.
+ * with the start line naming the config path, and the link is closed, which ends the child.
  *
- * The client writes one redacted diagnostic line per request to the server's stderr (issue #5), so the
- * child's stderr holds the start line and those lines, and nothing else: the test asserts that shape,
- * and reads the read's HTTP status from its diagnostic line for the summary line.
+ * The client writes one redacted diagnostic line per attempt to the server's stderr (issue #5), so the
+ * child's stderr holds the start line and those lines: the test asserts that every later line has a
+ * diagnostic line's shape, and reads the read's HTTP status from it for the summary line.
+ *
+ * The read goes through `client.request()` rather than `callTool()`: after `listTools()` the SDK client
+ * (1.32.1, `client/index.js`, `callTool`) validates any `structuredContent` against the tool's cached
+ * output schema, an error result's `{ error }` included, and would throw instead of returning the
+ * result the outcome table classifies.
  */
 
 import { homedir } from "node:os";
 
 import { spawnMcpStdio } from "@gripeventsctl/testing";
+import { type CallToolResult, CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterAll, beforeAll, describe, it } from "vitest";
 
 import { type LiveFixture, openLive, requestShapes } from "./lib/live-check.js";
@@ -51,7 +57,7 @@ async function waitForLines(read: () => string, count: number, timeoutMs = 10_00
 }
 
 describe("[CAP-E2E] 70-mcp-stdio: the built binary over stdio on the real home", () => {
-  it("lists exactly the v1 tools, answers one read, opens stderr with the start line, and ends", async (ctx) => {
+  it("lists exactly the v1 tools, answers one read, opens stderr with the start line, then closes", async (ctx) => {
     const { session } = fixture.ready(ctx);
     if (SHAPE === undefined) return drift(`${READ_TOOL} declares no request shape`);
     const link = await spawnMcpStdio({
@@ -70,7 +76,10 @@ describe("[CAP-E2E] 70-mcp-stdio: the built binary over stdio on the real home",
       if (names.some((name) => name.startsWith("gripeventsctl_auth_"))) drift("an auth tool is listed");
       if (names.includes("gripeventsctl_attendance_get")) drift("the held attendance get is listed");
 
-      const result = await link.callTool(READ_TOOL, {});
+      const result = (await link.client.request(
+        { method: "tools/call", params: { name: READ_TOOL, arguments: {} } },
+        CallToolResultSchema,
+      )) as CallToolResult;
       const classification = classify(result, ["items"]);
 
       const lines = await waitForLines(() => link.stderr(), 2);

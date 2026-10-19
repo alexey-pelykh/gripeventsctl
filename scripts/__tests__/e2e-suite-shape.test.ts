@@ -5,13 +5,16 @@
  * The repository gate over the live suite (issue #18 § The harness unit tests, `suite-shape.test.ts`):
  * the rules of `packages/e2e/src/lib/suite-shape.ts` run over the tracked tree (`git ls-files`, like
  * the other gates), and the live config collects nothing without `GRIPEVENTSCTL_E2E=1` and names the
- * path sequencer. The rules themselves are graded over synthetic trees by the e2e package's own
+ * path sequencer, and `vitest run --config vitest.e2e.config.ts --passWithNoTests` in the e2e package
+ * exits 0 with the variable removed (the `pnpm test:e2e` path CI never runs itself, because no workflow
+ * may run `test:e2e`). The rules themselves are graded over synthetic trees by the e2e package's own
  * `suite-shape.test.ts`; this file is the run over the real tree, on every CI job.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -25,6 +28,9 @@ import {
 } from "../../packages/e2e/src/lib/suite-shape.js";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
+const require = createRequire(import.meta.url);
+/** The Vitest CLI of the workspace, run with the current Node: the same binary `pnpm test:e2e` runs. */
+const VITEST_CLI = join(dirname(require.resolve("vitest/package.json")), "vitest.mjs");
 
 /** Every tracked path under the two directories the rules read, with its content. */
 function trackedTree(): Map<string, string> {
@@ -78,6 +84,19 @@ describe("[CAP-E2E] the live config", () => {
       if (saved !== undefined) process.env["GRIPEVENTSCTL_E2E"] = saved;
     }
   });
+
+  it("exits 0 and collects nothing when the e2e package's test:e2e command runs with the variable removed", () => {
+    const env = { ...process.env };
+    Reflect.deleteProperty(env, "GRIPEVENTSCTL_E2E");
+    const run = spawnSync(
+      process.execPath,
+      [VITEST_CLI, "run", "--config", "vitest.e2e.config.ts", "--passWithNoTests"],
+      { cwd: join(root, "packages", "e2e"), env, encoding: "utf8", timeout: 120_000 },
+    );
+    expect(run.error).toBeUndefined();
+    expect(`${run.stdout}${run.stderr}`).toContain("No test files found");
+    expect(run.status).toBe(0);
+  }, 150_000);
 
   it("keeps the unit config from collecting a live file", () => {
     const source = readFileSync(join(root, "packages/e2e/vitest.config.ts"), "utf8");

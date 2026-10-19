@@ -6,12 +6,14 @@
  * caller's own thing id, in two steps, as any MCP write runs: the dry run, the first real call refused
  * with `go-ahead-missing` and a proposal, the maintainer's approval in a terminal of their own (polled
  * from the journal read-only; the test never appends to it and never calls `writes go-ahead`), then
- * the second call. The message text is fixed per run date, so the repeat guard's hash matches across
- * the calls of one run; on every run after the first, the repeat guard holds the earlier self-write and
- * the test is inconclusive. Step 8 reads the send log and asserts the three lines the run left.
+ * the second call. The message text is fixed per run date, so the recorded go-ahead's message hash
+ * matches across the calls of one run; once a run has sent, the repeat guard holds that self-write for
+ * the container and every later run is inconclusive. A go-ahead approved in an earlier run of the same
+ * date that is still usable would let the first real call send, so the dry run's `go_ahead` verdict
+ * stops the run first. Step 8 reads the send log and asserts the three lines the run left.
  */
 
-import { foldJournal, readJournal, readSendLog, systemClock } from "@gripeventsctl/core";
+import { foldJournal, readJournal, readSendLog, redactString, systemClock } from "@gripeventsctl/core";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
 
 import { type LiveFixture, callLive, checkedCall, openLive, report } from "./lib/live-check.js";
@@ -81,6 +83,7 @@ describe("[CAP-E2E] 60-write: the one guarded self-message through the gate", ()
       "plan.request.path",
       "plan.verdicts.writes_enabled",
       "plan.verdicts.repeat_guard",
+      "plan.verdicts.go_ahead",
       "outcome",
     ]);
     const request = requireRecord(dry.content, "plan.request");
@@ -112,6 +115,12 @@ describe("[CAP-E2E] 60-write: the one guarded self-message through the gate", ()
         `the repeat guard holds a sent ${KIND} entry for this container from ${earlier?.time ?? "an earlier run"}`,
       );
     }
+    if (verdicts["go_ahead"] === "recorded") {
+      inconclusive(
+        ctx,
+        "a recorded go-ahead from an earlier run of this date still covers this text, so the first real call would send; run again once it has expired (24 hours) or on another date",
+      );
+    }
     if (dry.call.calls.length > 0) drift("the dry run sent a request");
 
     // 4. The first real call: refused for the missing go-ahead, with a proposal. A sent message here means the gate
@@ -128,7 +137,7 @@ describe("[CAP-E2E] 60-write: the one guarded self-message through the gate", ()
     if (refused.call.calls.length > 0) drift("the refused call sent a request");
 
     // 5. The maintainer approves in a terminal of their own: Vitest workers have no TTY.
-    process.stderr.write(`approve in a terminal of your own: gripeventsctl writes go-ahead ${id}\n`);
+    process.stderr.write(redactString(`approve in a terminal of your own: gripeventsctl writes go-ahead ${id}\n`));
 
     // 6. Poll the journal read-only until the proposal's latest event is `approved`.
     const deadline = Date.now() + APPROVAL_WAIT_MS;
@@ -156,7 +165,9 @@ describe("[CAP-E2E] 60-write: the one guarded self-message through the gate", ()
         outcome = "inconclusive";
         reason = "the platform offers no self-thread";
         process.stderr.write(
-          `${FILE}: the self-message was answered HTTP ${String(sent.calls.at(-1)?.status ?? "-")}, kind api\n`,
+          redactString(
+            `${FILE}: the self-message was answered HTTP ${String(sent.calls.at(-1)?.status ?? "-")}, kind api\n`,
+          ),
         );
       } else {
         outcome = failed.outcome;
