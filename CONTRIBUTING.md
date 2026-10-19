@@ -50,7 +50,7 @@ pnpm test             # Run unit tests, then the script self-tests under scripts
 pnpm test:coverage    # Run unit tests with coverage
 pnpm test:e2e         # Run E2E tests (sequential, needs a live event app session)
 pnpm typecheck        # Type check all packages
-pnpm lint             # Prettier format:check + ESLint + secret-leakage and dependency-confusion checks
+pnpm lint             # Prettier format:check + ESLint + the repository gates (secret leakage, dependency confusion, test traceability, dated API pages, workflow pins, README posture)
 pnpm format           # Auto-fix Prettier formatting
 pnpm license-check    # Verify dependency licenses
 pnpm dev              # Watch mode
@@ -58,6 +58,13 @@ pnpm dev              # Watch mode
 
 `pnpm lint` is the pre-push gate. Run `pnpm format` to fix any Prettier
 issue, then run `pnpm lint` again.
+
+Four gates have a strict mode that `pnpm lint` does not run. They run in the release workflow's
+`validate` job on a full clone and before a tag: `pnpm check-secret-leakage --history` scans every
+blob reachable from every ref and refuses a shallow clone; `pnpm check-api-docs-dated --strict` fails
+on a `docs/api/` page without a `Verified live YYYY-MM-DD` label (the three index pages are exempt);
+`pnpm check-test-traceability --strict` fails on a `planned` capability; `pnpm test:oracles` fails on
+an oracle file whose subject is not built.
 
 ### Capability tags
 
@@ -152,7 +159,7 @@ The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has five gates. An
 
 ### Releases
 
-A release is a GitHub Release whose tag is a semver version (`v0.1.0`, `v0.2.0-rc.1`). Publishing the release runs `.github/workflows/release.yml`: it validates on three operating systems, audits dependencies, stamps the tag's version into every publishable package and `server.json`, publishes to npm with provenance through OpenID Connect trusted publishing, and attaches the SBOMs and tarballs to the release. Nothing is published from a maintainer's machine.
+A release is a GitHub Release whose tag is a semver version (`v0.1.0`, `v0.2.0-rc.1`). Publishing the release runs `.github/workflows/release.yml`: it validates on three operating systems, audits dependencies, stamps the tag's version into every publishable package and `server.json`, publishes to npm with provenance through OpenID Connect trusted publishing, attaches the tarballs and, from a separate job, the SBOMs to the release, and publishes `server.json` to the MCP registry from a job that holds only `contents: read` and `id-token: write`. Nothing is published from a maintainer's machine. `pnpm check-workflow-pins` keeps the workflow's pins, permissions and strict steps as described.
 
 ### Partial closures
 
