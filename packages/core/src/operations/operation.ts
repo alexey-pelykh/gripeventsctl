@@ -14,7 +14,9 @@
  * does not apply, for example `type_ids` to `type`; `render.epochFields` names the output keys that hold epoch
  * seconds; `render.emptyText` is the sentence printed for an empty array result, for example `no active events`;
  * `render.tableField` names, for an object output, the key whose array of flat records renders as the table, the
- * other keys following as key-value lines (issue #11 § Additions to the `Operation` type); `render.human` is the
+ * other keys following as key-value lines (issue #11 § Additions to the `Operation` type); `render.note` is one
+ * sentence printed on its own line after the human rendering and appended to the MCP text block, never in `--json`
+ * or `structuredContent` (issue #13); `render.human` is the
  * operation's own human form of its validated output, for an operation whose item fixes a human form the generic
  * table and key-value renderings cannot give (the output module escapes and redacts it like every other human form,
  * and `--json` and `structuredContent` never use it); `exitCode(output)` is the CLI exit code of a completed run
@@ -94,6 +96,12 @@ export interface Operation<I extends z.ZodObject = z.ZodObject, O extends z.ZodT
      * key-value lines after the table, and `emptyText` replaces an empty table.
      */
     tableField?: string;
+    /**
+     * One sentence printed on its own line after the human rendering (the table, the key-value block or `emptyText`)
+     * and appended to the MCP text block; never part of `--json` or `structuredContent` (issue #13 § Addition to
+     * the `Operation` type: `chat list` notes that the thread list is also the connections list).
+     */
+    note?: string;
     /**
      * The human form of the validated output, where the operation's item fixes one the generic renderings cannot
      * give. A method, so an operation types it over its own output; the builders call it with the validated output.

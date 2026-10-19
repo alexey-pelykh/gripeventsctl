@@ -171,6 +171,41 @@ describe("[CAP-OUTPUT] [CAP-TERMINAL-ESCAPING] the output module: every form is 
       ).toBe("when: 2026-10-12T17:09:00+00:00");
     });
 
+    it("renders a null in an epoch field as an empty cell, never through the epoch formatter, and keeps the number in the --json form", () => {
+      process.env["TZ"] = "Europe/Amsterdam";
+      const schema = z.array(z.object({ id: z.number(), when: z.number().nullable() }));
+      const rows = [
+        { id: 1, when: SYNTHETIC_EPOCH },
+        { id: 2, when: null },
+      ];
+      const text = renderHuman(rows, { schema, render: { epochFields: ["when"] }, tty: false, colour: false });
+      expect(text.split("\n")).toEqual(["id | when", "1 | 2026-10-12T19:09:00+02:00", "2 | "]);
+      const written = new Capture();
+      writeOutput(rows, { json: true, stdout: written, schema, render: { epochFields: ["when"] } });
+      expect(JSON.parse(written.text)).toStrictEqual(rows);
+    });
+
+    it("render.note is one line after the table, the key-value block and the emptyText sentence alike, escaped, and never in the --json form; an operation without a note renders byte-identically to before the field existed", () => {
+      const note = "This list is also your connections list.";
+      const table = renderHuman(records, { schema: recordSchema, render: { note }, tty: false, colour: false });
+      expect(table).toBe(`${renderHuman(records, { schema: recordSchema, tty: false, colour: false })}\n${note}`);
+      const block = renderHuman({ a: 1 }, { schema: z.object({ a: z.number() }), render: { note } });
+      expect(block).toBe(`a: 1\n${note}`);
+      const empty = renderHuman([], { schema: recordSchema, render: { emptyText: "no threads", note } });
+      expect(empty).toBe(`no threads\n${note}`);
+      expect(renderHuman([], { schema: recordSchema, render: { note: "a\x1b[2Jb\u202e" } })).toBe(
+        "no results\na\\x1b[2Jb\\u{202e}",
+      );
+      const written = new Capture();
+      writeOutput(records, { json: true, stdout: written, schema: recordSchema, render: { note } });
+      expect(written.text).toBe(`${JSON.stringify(records, null, 2)}\n`);
+      // Regression: no note, an empty note and an undefined note all give the rendering the field never touched.
+      const before = "id | name | epoch\n1 | Test Person 1 | 1791824940\n2 | Test Person 2 | 1791825000";
+      for (const render of [undefined, {}, { note: undefined }, { note: "" }]) {
+        expect(renderHuman(records, { schema: recordSchema, render, tty: false, colour: false })).toBe(before);
+      }
+    });
+
     it("escapes every value of the human form in place and keeps newline, tab and right-to-left letters", () => {
       const text = renderHuman({ text: "a\x1b[2Jb\nc\td שלום" }, { schema: z.object({ text: z.string() }) });
       expect(text).toBe("text: a\\x1b[2Jb\nc\td שלום");
