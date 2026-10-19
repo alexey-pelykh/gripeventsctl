@@ -34,7 +34,7 @@
  *   2: a usage or parse error (the catalog unreadable or malformed)
  *
  * `--strict` additionally fails on any `planned` capability remaining, except a manual-only row whose
- * `recorded` field is set. It is not run in `pnpm lint`; a later item wires it into the release gate.
+ * `recorded` field is set. It is not run in `pnpm lint`; the release workflow's `validate` job runs it before a tag.
  */
 
 import { execFileSync } from "node:child_process";
