@@ -8,9 +8,18 @@
  * `operation.ts`.
  */
 
+import { attendeesDump } from "./attendees/dump.js";
+import { attendeesGet } from "./attendees/get.js";
+import { attendeesList } from "./attendees/list.js";
 import { eventsCheck } from "./events/check.js";
 import { eventsList } from "./events/list.js";
 import type { Operation } from "./operation.js";
 
 /** The registry, ordered: events, attendees, match, chat, schedule, interest, writes. */
-export const OPERATIONS: readonly Operation[] = Object.freeze([eventsCheck, eventsList]);
+export const OPERATIONS: readonly Operation[] = Object.freeze([
+  eventsCheck,
+  eventsList,
+  attendeesList,
+  attendeesDump,
+  attendeesGet,
+]);
