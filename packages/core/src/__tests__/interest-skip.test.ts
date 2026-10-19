@@ -28,7 +28,7 @@ import {
 } from "@gripeventsctl/testing";
 import { describe, expect, it } from "vitest";
 
-import { OPERATIONS, type WriteResult } from "../index.js";
+import { OPERATIONS, type WriteResult, writeResultSchema } from "../index.js";
 import { DRY_RUN_HELP, writeExitCode } from "../operations/interest/show.js";
 import {
   SKIP_ANSWER,
@@ -111,7 +111,7 @@ describe("[CAP-WRITES] interest skip: the status read first, then POST match_man
     }
     expect(SKIP_ANSWER).toBe("no");
     // The output is the gate's result as it is: no `connection` field is added.
-    expect(Object.keys(interestSkipOutput.shape)).not.toContain("message_id_only");
+    expect(interestSkipOutput).toBe(writeResultSchema);
     // An unknown `message` key is dropped by zod's default object mode: no text can reach the body.
     expect(interestSkipInput.parse({ thing_id: 42, message: "x" })).toStrictEqual({ thing_id: 42, dry_run: false });
     for (const value of [0, -1, 1.5, "42", undefined]) {
