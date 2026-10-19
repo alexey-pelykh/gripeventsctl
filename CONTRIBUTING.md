@@ -50,7 +50,13 @@ pnpm test             # Run unit tests, then the script self-tests under scripts
 pnpm test:coverage    # Run unit tests with coverage
 pnpm test:e2e         # Run E2E tests (sequential, needs a live event app session)
 pnpm typecheck        # Type check all packages
-pnpm lint             # Prettier format:check + ESLint + the repository gates (secret leakage, dependency confusion, test traceability, dated API pages, workflow pins, README posture)
+pnpm lint             # Prettier format:check + ESLint + the repository gates below
+pnpm check-secret-leakage      # No secret-shaped value in a tracked file; --history scans the git history too (release only)
+pnpm check-dep-confusion       # Every @gripeventsctl/* dependency resolves to the workspace
+pnpm check-test-traceability   # Every test file tagged, every active capability covered; --strict fails on a planned row (release only)
+pnpm check-api-docs-dated      # Every docs/api/ page dated or exempt, every operation's page anchor resolves; --strict fails on an undated page (release only)
+pnpm check-workflow-pins       # The workflows' pins, permissions, strict steps, the install flags, the matrix and the Node floor
+pnpm check-readme-posture      # The disclaimer block in the package READMEs, the MCP warning, the legitimacy page, the unofficial framing
 pnpm format           # Auto-fix Prettier formatting
 pnpm license-check    # Verify dependency licenses
 pnpm dev              # Watch mode
@@ -59,19 +65,22 @@ pnpm dev              # Watch mode
 `pnpm lint` is the pre-push gate. Run `pnpm format` to fix any Prettier
 issue, then run `pnpm lint` again.
 
-Four gates have a strict mode that `pnpm lint` does not run. They run in the release workflow's
-`validate` job on a full clone and before a tag: `pnpm check-secret-leakage --history` scans every
-blob reachable from every ref and refuses a shallow clone; `pnpm check-api-docs-dated --strict` fails
-on a `docs/api/` page without a `Verified live YYYY-MM-DD` label (the three index pages are exempt);
-`pnpm check-test-traceability --strict` fails on a `planned` capability; `pnpm test:oracles` fails on
-an oracle file whose subject is not built.
+Three gates have a strict mode that `pnpm lint` does not run, and one more strict check sits beside
+them. They run in the release workflow's `validate` job on a full clone and before a tag:
+`pnpm check-secret-leakage --history` scans every blob reachable from every ref, with the tree scan's
+path exclusions applied and blobs over 1 MiB skipped, and refuses a shallow clone;
+`pnpm check-api-docs-dated --strict` fails on a `docs/api/` page without a `Verified live YYYY-MM-DD`
+label (`not-verified.md`, `README.md` and `platform-landscape.md` are exempt until the maintainer
+dates them or removes them from `EXEMPT_PAGES`); `pnpm check-test-traceability --strict` fails on a
+`planned` capability; `pnpm test:oracles` runs every oracle file in strict mode and fails on one whose
+subject is not built.
 
 ### Capability tags
 
 Every test file's first top-level `describe` title starts with one or more capability tags in
 square brackets, such as `[CAP-GATE] no write request leaves the process ...`, naming rows of
 [`test-capabilities.yaml`](test-capabilities.yaml) at the repository root. `pnpm check-test-traceability`,
-the last step of `pnpm lint`, fails on a test file without a tag, a tag the catalog does not hold, an
+a step of `pnpm lint`, fails on a test file without a tag, a tag the catalog does not hold, an
 `active` capability with no tagged file at a level it declares, and a `planned` capability that has a
 tagged file: the pull request that lands a capability's first tagged test flips its row to `active`.
 A file under `packages/e2e/src/` ending in `.e2e.test.ts` counts for the live level, a file under
@@ -159,7 +168,7 @@ The [pull request template](.github/PULL_REQUEST_TEMPLATE.md) has five gates. An
 
 ### Releases
 
-A release is a GitHub Release whose tag is a semver version (`v0.1.0`, `v0.2.0-rc.1`). Publishing the release runs `.github/workflows/release.yml`: it validates on three operating systems, audits dependencies, stamps the tag's version into every publishable package and `server.json`, publishes to npm with provenance through OpenID Connect trusted publishing, attaches the tarballs and, from a separate job, the SBOMs to the release, and publishes `server.json` to the MCP registry from a job that holds only `contents: read` and `id-token: write`. Nothing is published from a maintainer's machine. `pnpm check-workflow-pins` keeps the workflow's pins, permissions and strict steps as described.
+A release is a GitHub Release whose tag is a semver version (`v0.1.0`, `v0.2.0-rc.1`). Publishing the release runs `.github/workflows/release.yml`: it validates on three operating systems, audits dependencies, stamps the tag's version into every publishable package and `server.json`, publishes to npm with provenance through OpenID Connect trusted publishing, attaches the tarballs and, from a separate job, the SBOMs to the release, and publishes `server.json` to the MCP registry from a job that holds only `contents: read` and `id-token: write`. Nothing is published from a maintainer's machine. `pnpm check-workflow-pins` keeps every action SHA-pinned, the token-holding jobs free of unpinned installs and of the SBOM generator, the registry job at its two rights, and the `validate` job on a full clone with the three strict gate commands.
 
 ### Partial closures
 

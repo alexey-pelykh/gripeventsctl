@@ -27,7 +27,8 @@
  *     fails the check: the check cannot vouch for a file it did not read.
  *
  * History pass (`--history`):
- *   - Runs after the tree scan, which is unchanged. Without the flag the script behaves exactly as before.
+ *   - Runs after the tree scan, which is unchanged. Without the flag the script scans the tree exactly as before;
+ *     the one addition on that path is that an unknown argument now exits 2 with a usage line instead of being ignored.
  *   - Refuses a shallow clone (`git rev-parse --is-shallow-repository` prints `true`): a scan over the few commits a
  *     shallow clone holds must never read as clean. The CI job that runs it checks out with `fetch-depth: 0`.
  *   - Lists every commit (`git rev-list --all`), every blob each one reaches (`git ls-tree -r -l --full-tree -z`), and
