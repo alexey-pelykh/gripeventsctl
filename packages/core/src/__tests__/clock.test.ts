@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { systemClock } from "../lib/clock.js";
+import { abortError, systemClock, throwIfAborted } from "../lib/clock.js";
 
 describe("[CAP-CLIENT] the system clock (lib/clock.ts)", () => {
   it("is frozen, so no importer can replace its sleep, its timeoutSignal or its now at run time", () => {
@@ -40,5 +40,43 @@ describe("[CAP-CLIENT] the system clock (lib/clock.ts)", () => {
       setTimeout(resolve, 20);
     });
     expect(signal.aborted).toBe(true);
+  });
+
+  it("a sleep given a signal rejects at once when it aborts, with the signal's own Error reason, and holds no timer afterwards", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled by the test");
+    const sleeping = systemClock.sleep(60_000, controller.signal);
+    const started = Date.now();
+    controller.abort(reason);
+    await expect(sleeping).rejects.toBe(reason);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    // A signal already aborted rejects before any timer is set; a bare abort() gives the AbortError DOMException.
+    const bare = new AbortController();
+    bare.abort();
+    await expect(systemClock.sleep(60_000, bare.signal)).rejects.toMatchObject({ name: "AbortError" });
+    // A signal that never aborts leaves the sleep as it was.
+    await systemClock.sleep(1, new AbortController().signal);
+  });
+
+  it("abortError gives the reason where it is an Error and wraps any other reason as the cause; throwIfAborted throws only for an aborted signal", () => {
+    const reason = new Error("an error reason");
+    const errored = new AbortController();
+    errored.abort(reason);
+    expect(abortError(errored.signal)).toBe(reason);
+    const text = new AbortController();
+    text.abort("a text reason");
+    const wrapped = abortError(text.signal);
+    expect(wrapped).toBeInstanceOf(Error);
+    expect(wrapped.message).toBe("the call was cancelled");
+    expect(wrapped.cause).toBe("a text reason");
+    expect(() => {
+      throwIfAborted(undefined);
+    }).not.toThrow();
+    expect(() => {
+      throwIfAborted(new AbortController().signal);
+    }).not.toThrow();
+    expect(() => {
+      throwIfAborted(errored.signal);
+    }).toThrow(reason);
   });
 });
