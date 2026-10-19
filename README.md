@@ -33,8 +33,8 @@ The friction in the code is on purpose: writes are off by default, repeats are b
 This repository holds the workspace scaffold and, in `@gripeventsctl/core`, the transport client the commands will use (`GripClient`: the fixed base URL and header set, the config lookup, the login call, the response envelope and error kinds, the HTTP 429 backoff, paging, one request in flight per process). Of the commands below under "Planned surface", only the three `auth` commands, the two `events` commands, the three `attendees` commands and `match status` exist.
 
 - Nothing is published to npm yet. The npm badges show "not found" until the first release.
-- The binary answers `--version`, `--help`, the three `auth` commands (`auth signin <slug>`, `auth signout`, `auth status`), the two `events` commands (`events check <slug>`, `events list`) and the three `attendees` commands (`attendees list --type <ids> [--page <n>]`, `attendees dump --type <ids> --out <path>`, `attendees get <thing id | user_id | me>`). It has no other commands.
-- `gripeventsctl mcp` starts the MCP server over stdio. The server lists five tools, `gripeventsctl_events_check`, `gripeventsctl_events_list`, `gripeventsctl_attendees_list`, `gripeventsctl_attendees_dump` and `gripeventsctl_attendees_get`.
+- The binary answers `--version`, `--help`, the three `auth` commands (`auth signin <slug>`, `auth signout`, `auth status`), the two `events` commands (`events check <slug>`, `events list`) and the three `attendees` commands (`attendees list --type <ids> [--page <n>]`, `attendees dump --type <ids> --out <path>`, `attendees get <thing id | user_id | me>`) and `match status <thing id>`. It has no other commands.
+- `gripeventsctl mcp` starts the MCP server over stdio. The server lists six tools, `gripeventsctl_events_check`, `gripeventsctl_events_list`, `gripeventsctl_attendees_list`, `gripeventsctl_attendees_dump`, `gripeventsctl_attendees_get` and `gripeventsctl_match_status`.
 
 ## Install
 
