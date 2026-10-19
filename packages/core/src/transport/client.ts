@@ -17,7 +17,9 @@
  *   with the queue slot held, and the same request is retried unchanged. Nothing rotates. A second
  *   caller waits until the first request has answered or failed, its 429 waits included (issue #5
  *   § Every request), so in the MCP server one throttled call holds every other tool call for the
- *   whole schedule. A signal that cancels a call while it waits is a requirement of #11.
+ *   whole schedule. A call's optional `signal` (issue #11) removes a request still waiting, in the queue or in a
+ *   profile-spacing wait, and ends a 429 wait early, rejecting the call with the signal's abort reason; it never cuts
+ *   a request already sent, whose answer is classified like any other.
  * - Every answer is classified once, in the order the doc comment of `#classify` lists, into
  *   exactly one error class of `errors.ts`.
  * - Diagnostic lines on the injected `stderr`, one per attempt: the method, the path template
@@ -42,7 +44,7 @@ import {
   recordAuthFailure,
   resolveSessionToken,
 } from "../config/store.js";
-import { type Clock, systemClock } from "../lib/clock.js";
+import { type Clock, abortError, systemClock, throwIfAborted } from "../lib/clock.js";
 import { redactString, registerSecret } from "../lib/redact.js";
 import { MAX_RETRIES, backoffWaitS } from "./backoff.js";
 import {
@@ -149,10 +151,17 @@ export interface GetOptions<T> {
   query?: Query;
   /** Types the answer's `data`; a failure is the `api` kind naming the field. */
   schema?: ZodType<T>;
+  /**
+   * Cancels the call while it waits: a request still in the queue or in a profile-spacing wait is never sent, a 429
+   * wait ends at once, and the call rejects with the signal's abort reason. A request already sent is never cut.
+   */
+  signal?: AbortSignal;
 }
 
 export interface PostOptions<T> {
   schema?: ZodType<T>;
+  /** As on `GetOptions`. */
+  signal?: AbortSignal;
 }
 
 export interface PagesOptions<T> {
@@ -163,6 +172,8 @@ export interface PagesOptions<T> {
   pauseMs?: number;
   /** Types each entry; a failure is the `api` kind naming the field. */
   schema?: ZodType<T>;
+  /** As on `GetOptions`; the pause between pages ends at once too. */
+  signal?: AbortSignal;
 }
 
 export interface LoginInput {
@@ -201,6 +212,8 @@ interface RequestSpec {
   slug?: string;
   /** The page a `pages()` request asks for: every message of its errors names it; the diagnostic line does not. */
   page?: number;
+  /** The caller's cancellation, where the call carried one (`GetOptions.signal`). */
+  signal?: AbortSignal;
 }
 
 interface Answer {
@@ -450,7 +463,13 @@ export class GripClient {
 
   /** An authenticated GET; returns the `data` of a `success: true` answer, typed by `schema` when given. */
   async get<T = unknown>(path: string, options: GetOptions<T> = {}): Promise<T> {
-    const spec: RequestSpec = { method: "GET", path, url: this.#url(path, options.query), context: "authenticated" };
+    const spec: RequestSpec = {
+      method: "GET",
+      path,
+      url: this.#url(path, options.query),
+      context: "authenticated",
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    };
     const { status, data } = await this.#send(spec);
     return this.#validate(data, options.schema, spec, status);
   }
@@ -463,6 +482,7 @@ export class GripClient {
       url: this.#url(path),
       body: JSON.stringify(body),
       context: "authenticated",
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     };
     const { status, data } = await this.#send(spec);
     return this.#validate(data, options.schema, spec, status);
@@ -482,7 +502,7 @@ export class GripClient {
     // the caller does to its own objects between pages. `page` goes ahead of the query, where `docs/api/attendees.md`
     // § Directory search records the verified call (`page=<n>&sort=name&type_id=<ids>`).
     const fixedQuery: Query = { ...query };
-    const { pauseMs = 0, schema } = options;
+    const { pauseMs = 0, schema, signal } = options;
     if (path.includes("?")) {
       throw new UsageError(
         `GripClient: pages() takes its query as an argument, not in the path: ${quoted(path)}`,
@@ -502,13 +522,14 @@ export class GripClient {
       );
     }
     for (let page = 1; ; page += 1) {
-      if (page > 1 && pauseMs > 0) await this.#clock.sleep(pauseMs);
+      if (page > 1 && pauseMs > 0) await this.#sleep(pauseMs, signal);
       const spec: RequestSpec = {
         method: "GET",
         path,
         url: this.#url(path, { page, ...fixedQuery }),
         context: "authenticated",
         page,
+        ...(signal === undefined ? {} : { signal }),
       };
       const { status, data } = await this.#send(spec);
       if (!Array.isArray(data)) {
@@ -637,13 +658,65 @@ export class GripClient {
    * (`config/op.ts`), so a hung `op` cannot hold the queue for longer.
    */
   #send(spec: RequestSpec): Promise<Classified> {
-    return enqueue(async () => {
-      const headers =
-        spec.context === "authenticated"
-          ? authenticatedHeaders(await this.#sessionToken(), { body: spec.body !== undefined })
-          : (spec.headers ?? {});
-      return this.#exchange(spec, headers);
+    const { signal } = spec;
+    if (signal === undefined) return enqueue(() => this.#resolveAndExchange(spec));
+    return new Promise<Classified>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(abortError(signal));
+        return;
+      }
+      // A call cancelled while it waits in the queue rejects at once, with the signal's reason; when its turn comes
+      // it is skipped and the slot passes to the next request. From its turn on, the abort reaches the call through
+      // `#sleep` and the check before the attempt, never through this listener: a request already sent runs to its
+      // answer.
+      const onAbort = (): void => {
+        reject(abortError(signal));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      void enqueue(async (): Promise<void> => {
+        signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) return;
+        try {
+          resolve(await this.#resolveAndExchange(spec));
+        } catch (error: unknown) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
     });
+  }
+
+  /** The queue slot's work: the token resolved and the headers built inside the slot, then the exchange. */
+  async #resolveAndExchange(spec: RequestSpec): Promise<Classified> {
+    const headers =
+      spec.context === "authenticated"
+        ? authenticatedHeaders(await this.#sessionToken(), { body: spec.body !== undefined })
+        : (spec.headers ?? {});
+    return this.#exchange(spec, headers);
+  }
+
+  /**
+   * `clock.sleep(ms)`, ended early by `signal`: the clock is given the signal, so a clock that honours it holds no
+   * timer, and the wait is raced against the abort event as well, so a clock that ignores it ends the wait all the
+   * same. Rejects with the signal's abort reason.
+   */
+  async #sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+    if (signal === undefined) {
+      await this.#clock.sleep(ms);
+      return;
+    }
+    throwIfAborted(signal);
+    let onAbort: () => void = () => undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        reject(abortError(signal));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      await Promise.race([this.#clock.sleep(ms, signal), aborted]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 
   /**
@@ -657,7 +730,7 @@ export class GripClient {
     const last = lastProfileReadAt.get(this.#clock);
     if (last !== undefined) {
       const wait = Math.min(last + PROFILE_SPACING_MS - this.#clock.now().getTime(), PROFILE_SPACING_MS);
-      if (wait > 0) await this.#clock.sleep(wait);
+      if (wait > 0) await this.#sleep(wait, spec.signal);
     }
     lastProfileReadAt.set(this.#clock, this.#clock.now().getTime());
   }
@@ -671,6 +744,8 @@ export class GripClient {
     const subject = subjectOf(spec);
     for (let retries = 0; ; retries += 1) {
       await this.#spaceProfileRead(spec);
+      // The last moment a cancelled call is removed: once sent, the request runs to its answer.
+      throwIfAborted(spec.signal);
       const answer = await this.#attempt(spec, headers);
       if (answer.status !== 429) {
         this.#log(`${line}: ${String(answer.status)}`);
@@ -697,7 +772,7 @@ export class GripClient {
       this.#log(
         `${line}: 429; waiting ${String(waitS)} s before retry ${String(retries + 1)} of ${String(MAX_RETRIES)}`,
       );
-      await this.#clock.sleep(waitS * 1000);
+      await this.#sleep(waitS * 1000, spec.signal);
     }
   }
 
