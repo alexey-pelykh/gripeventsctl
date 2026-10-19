@@ -17,6 +17,7 @@ import { eventsCheck } from "./events/check.js";
 import { eventsList } from "./events/list.js";
 import { matchStatus } from "./match/status.js";
 import type { Operation } from "./operation.js";
+import { scheduleInfo } from "./schedule/info.js";
 import { writesPending } from "./writes/pending.js";
 import { writesStatus } from "./writes/status.js";
 
@@ -30,6 +31,7 @@ export const OPERATIONS: readonly Operation[] = Object.freeze([
   matchStatus,
   chatList,
   chatThread,
+  scheduleInfo,
   writesStatus,
   writesPending,
 ]);
