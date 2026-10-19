@@ -19,13 +19,16 @@
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "typecheck": "turbo run typecheck",
-    "lint": "pnpm format:check && turbo run lint && pnpm lint:root && pnpm check-secret-leakage && pnpm check-dep-confusion && pnpm check-test-traceability",
+    "lint": "pnpm format:check && turbo run lint && pnpm lint:root && pnpm check-secret-leakage && pnpm check-dep-confusion && pnpm check-test-traceability && pnpm check-api-docs-dated && pnpm check-workflow-pins && pnpm check-readme-posture",
     "lint:root": "eslint eslint.config.js vitest.config.ts vitest.e2e.config.ts vitest.oracles.config.ts scripts/",
     "license-check": "node scripts/check-licenses.js",
     "check-secret-leakage": "tsx scripts/check-secret-leakage.ts",
     "check-dep-confusion": "tsx scripts/check-dep-confusion.ts",
     "check-oracles": "tsx scripts/check-oracles.ts",
     "check-test-traceability": "tsx scripts/check-test-traceability.ts",
+    "check-api-docs-dated": "tsx scripts/check-api-docs-dated.ts",
+    "check-workflow-pins": "tsx scripts/check-workflow-pins.ts",
+    "check-readme-posture": "tsx scripts/check-readme-posture.ts",
     "dev": "turbo run dev"
   },
   "devDependencies": {
