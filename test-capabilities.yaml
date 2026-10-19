@@ -77,7 +77,7 @@ capabilities:
   - id: CAP-SENDLOG
     description: One append-only, 0600, no-follow line per attempt with the documented fields, minimal and intact
     levels: [U, C, P]
-    status: planned
+    status: active
   - id: CAP-WRITES
     description: The three writes read the status first, post only to has_match_none, enforce the message policy, send the documented bodies, and stop at the swipe cap
     levels: [S]

@@ -10,7 +10,7 @@
 
 import { Writable } from "node:stream";
 
-import { type Interceptable, MockAgent } from "undici";
+import { type Interceptable, MockAgent, request } from "undici";
 import { afterAll, afterEach } from "vitest";
 
 /**
@@ -50,6 +50,20 @@ export function mockGrip(hooks: MockGripHooks = { afterEach, afterAll }): MockAg
 /** The interceptable pool of the API origin: `gripPool(agent).intercept({ path, method }).reply(...)`. */
 export function gripPool(agent: MockAgent): Interceptable {
   return agent.get(MOCK_API_ORIGIN);
+}
+
+/**
+ * One request to `path` under the API origin through `agent`, made by the test on a worker's behalf: a forked
+ * process cannot reach the parent's mock agent, so the worker relays the request over IPC and the parent sends it
+ * here, where `killAtIntercept()` fires. Returns the status and the body text.
+ */
+export async function requestThrough(
+  agent: MockAgent,
+  path: string,
+  method: "GET" | "POST" = "GET",
+): Promise<{ status: number; body: string }> {
+  const answer = await request(`${MOCK_API_ORIGIN}${path}`, { method, dispatcher: agent });
+  return { status: answer.statusCode, body: await answer.body.text() };
 }
 
 class TextSink extends Writable {
