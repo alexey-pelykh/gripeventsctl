@@ -10,8 +10,11 @@
  * imports nothing that can POST. The output is the projection `{ status }` with every other key of the answer
  * dropped; the value is shown as the platform sent it. The four documented values are `has_match_none` (not yet
  * answered), `has_match_yes` (interest shown), `has_match_no` (skipped) and `has_connection` (the other person showed
- * interest back); any other value passes through unchanged, with one warning line on `ctx.stderr` (escaped and
- * redacted) naming it and listing the four, because a fifth value is a platform change to report, not a failed read.
+ * interest back); any other value passes through unchanged, with one warning line on `ctx.stderr` naming it and
+ * listing the four, because a fifth value is a platform change to report, not a failed read. The line is redacted
+ * first, so the patterns and the registered values read the text as sent, then escaped for the terminal, then kept
+ * to one physical line like the transport's own lines: a wire value can hold a line break, and a second line could
+ * read as a transport diagnostic.
  * A missing `data.status` is the transport's `api` kind naming the field; every other error propagates untouched.
  * No side effect: this is the read the gated writes run before every POST, and the user's own view of the same answer.
  */
@@ -20,6 +23,7 @@ import { z } from "zod";
 
 import { escapeForTerminal } from "../../lib/escape.js";
 import { redactString } from "../../lib/redact.js";
+import { escapeLineBreaks } from "../../transport/errors.js";
 import { containerIdOf, signalOption } from "../context.js";
 import { defineOperation } from "../operation.js";
 
@@ -54,9 +58,14 @@ export function matchStatusPath(containerId: number, thingId: number): string {
   return `container/${String(containerId)}/thing/${CALLER_SEGMENT}/match/${String(thingId)}/status`;
 }
 
-/** The one warning line for a value the page does not record, before escaping and redaction. */
+/** The one warning line for a value the page does not record, before redaction and escaping. */
 export function unknownStatusWarning(status: string): string {
   return `unknown match status "${status}"; the documented values are ${DOCUMENTED_MATCH_STATUSES.join(", ")}`;
+}
+
+/** The warning as written: redacted, then escaped for the terminal, then every remaining line break escaped. */
+export function unknownStatusWarningLine(status: string): string {
+  return escapeLineBreaks(escapeForTerminal(redactString(unknownStatusWarning(status))));
 }
 
 export const matchStatus = defineOperation({
@@ -82,7 +91,7 @@ export const matchStatus = defineOperation({
       ...signalOption(ctx),
     });
     if (!DOCUMENTED_MATCH_STATUSES.includes(answer.status)) {
-      ctx.stderr.write(`${redactString(escapeForTerminal(unknownStatusWarning(answer.status)))}\n`);
+      ctx.stderr.write(`${unknownStatusWarningLine(answer.status)}\n`);
     }
     return { status: answer.status };
   },

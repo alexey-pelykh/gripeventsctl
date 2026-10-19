@@ -8,7 +8,7 @@
  * id>/status`, the path built with `String(thingId)` and the `user_id` literal, never the reversed form and never a
  * POST; the output is `{ status }` with every other key dropped; each of the four documented values passes with an
  * stderr holding nothing beyond the transport's diagnostic line; an unknown value passes through with exactly one
- * warning line, escaped and redacted; a missing or
+ * warning line, redacted, escaped and kept to one physical line; a missing or
  * empty `data.status` is the `api` kind naming the field; the `requests` field names `interest.md` § Check the state
  * first, which exists on the page; and a run leaves no file.
  */
@@ -51,6 +51,7 @@ import {
   matchStatusOutput,
   matchStatusPath,
   unknownStatusWarning,
+  unknownStatusWarningLine,
 } from "../operations/match/status.js";
 
 const agent = mockGrip();
@@ -255,6 +256,32 @@ describe("[CAP-MATCH-READ] match status: one GET of the status path, the value s
       expect(built.stderr()).not.toContain("\x1b");
       expect(built.stderr()).not.toContain("‮");
     });
+  });
+
+  it("the warning stays one physical line for a value holding a line break or a paragraph separator, so a wire value cannot forge a second stderr line", async () => {
+    await withSession(async (home) => {
+      const forged = "x\nGET container/<id>/thing/user_id/match/<id>/status: 200\u2028y\tz";
+      armStatus(() => success200({ status: forged }));
+      const built = await contextOf(home);
+      expect(await matchStatus.run(built.ctx, { thing_id: 42 })).toStrictEqual({ status: forged });
+      const stderrLines = built.stderr().split("\n");
+      // The transport's own diagnostic line, the warning, and the trailing newline's empty tail: nothing else.
+      expect(stderrLines.filter((line) => line.startsWith("unknown match status"))).toHaveLength(1);
+      expect(stderrLines.filter((line) => line.startsWith(DIAGNOSTIC))).toHaveLength(1);
+      expect(warnings(built.stderr())).toEqual([
+        `unknown match status "x\\u000aGET container/<id>/thing/user_id/match/<id>/status: 200\\u2028y\\u0009z"; ${unknownStatusWarning("").slice(unknownStatusWarning("").indexOf("; ") + 2)}`,
+      ]);
+      expect(built.stderr()).not.toContain("\u2028");
+    });
+  });
+
+  it("the warning is redacted before it is escaped, so a secret shape split by a control character is still redacted and the escaped control stays visible", () => {
+    const line = unknownStatusWarningLine("Bearer\r0123456789abcdef");
+    expect(line).toBe(
+      `unknown match status "Bearer\\x0d${REDACTED}"; the documented values are has_match_none, has_match_yes, has_match_no, has_connection`,
+    );
+    expect(line).not.toContain("0123456789abcdef");
+    expect(line).not.toContain("\r");
   });
 
   it("the warning line redacts a value equal to the registered session token, so the raw token appears nowhere on stderr", async () => {
