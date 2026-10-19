@@ -13,10 +13,14 @@
  *   of `attendees list` reads as the last page); a nested array or object inside a record renders as compact JSON in
  *   its cell; an empty array renders `render.emptyText` (default `no results`) as a statement, never as an error; a
  *   field named in `render.epochFields` renders as local ISO 8601 with the offset (`2026-10-12T19:09:00+02:00`); a
- *   key named `thing_id` or `id` is always a visible column, as every key of a record is. An object whose
+ *   key named `thing_id` or `id` is always a visible column, as every key of a record is; a `null` in an epoch field
+ *   renders as an empty cell, never through the epoch formatter. An object whose
  *   `render.tableField` names a key renders that key's array as the table (its columns from the schema's element,
  *   then the keys the records hold; `emptyText` where it is empty) and the remaining keys as key-value lines after it
- *   (issue #11 § Additions to the `Operation` type). Colour is used only for emphasis (the table header in bold),
+ *   (issue #11 § Additions to the `Operation` type). An operation whose `render.note` gives a sentence has it printed
+ *   on its own line after the human rendering, table, key-value block or empty-text sentence alike, and so after the
+ *   MCP text block, which is this rendering; `--json` and `structuredContent` never carry it (issue #13).
+ *   Colour is used only for emphasis (the table header in bold),
  *   never as the only carrier of a state, and is off when `NO_COLOR` is set or stdout is not a TTY. An operation
  *   whose item fixes its own human form gives it as `render.human`; its text is escaped here like every other human
  *   rendering, and the `--json` form and `structuredContent` never use it.
@@ -48,6 +52,12 @@ export interface RenderHints {
   emptyText?: string | undefined;
   /** For an object output, the key whose array of flat records renders as the table, the other keys following it. */
   tableField?: string | undefined;
+  /**
+   * One sentence printed on its own line after the human rendering (the table, the key-value block or `emptyText`),
+   * and so after the MCP text block, which is the same rendering; never in `--json` or `structuredContent`
+   * (issue #13: `chat list` notes that the thread list is also the connections list).
+   */
+  note?: string | undefined;
   /**
    * The operation's own human form of its validated output, where its item fixes one the generic renderings cannot
    * give (`events check`: one line and a sentence for an unknown slug). Escaped here like every other human form,
@@ -203,9 +213,17 @@ function renderArray(output: readonly unknown[], options: RenderOptions, schema:
  * The human form of `output`, escaped, without a trailing newline: the operation's own form where `render.human`
  * gives one; else a table for an array of flat records, key-value lines for an object (the table of the key
  * `render.tableField` names first, where the object holds an array under it), the empty-text sentence for an empty
- * array, one line per entry for an array of scalars, and the value itself for a scalar.
+ * array, one line per entry for an array of scalars, and the value itself for a scalar; then, where `render.note`
+ * gives one, the note sentence on its own line.
  */
 export function renderHuman(output: unknown, options: RenderOptions = {}): string {
+  const note = options.render?.note;
+  const body = renderBody(output, options);
+  return note === undefined || note === "" ? body : `${body}\n${escapeForTerminal(note)}`;
+}
+
+/** The human form without the note: what `renderHuman` renders before `render.note`. */
+function renderBody(output: unknown, options: RenderOptions): string {
   const human = options.render?.human;
   if (human !== undefined) return escapeForTerminal(human(output));
   const epochFields = options.render?.epochFields ?? [];

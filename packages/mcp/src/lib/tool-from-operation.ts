@@ -29,7 +29,8 @@
  *   result), and returns
  *   `{ content: [{ type: "text", text }], structuredContent }`, where `text` is
  *   the same human rendering the CLI prints off a TTY (plain rows or key-value lines, escaped, redacted, never
- *   coloured) and `structuredContent` is the validated output, wrapped when an array, with every string value passed
+ *   coloured, with `op.render.note` appended on its own line where the operation carries one, issue #13) and
+ *   `structuredContent` is the validated output, wrapped when an array, never the note, with every string value passed
  *   through `redactString`. A `GripError` returns the error result of `lib/error-result.ts`; an unexpected exception
  *   is the `api` kind with a redacted message. Nothing throws past the SDK.
  */

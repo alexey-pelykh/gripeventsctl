@@ -322,6 +322,30 @@ describe("[CAP-PARITY] [CAP-OUTPUT] [CAP-TERMINAL-ESCAPING] [CAP-PACING] the MCP
       });
     });
 
+    it("render.note is appended to the text block on its own line, as on the CLI, and is absent from structuredContent", async () => {
+      await withTempHome(async (home) => {
+        const note = "This list is also your connections list.";
+        const operation = syntheticOperation({ render: { note } });
+        const result = await withLink(home.env, [operation], (l) =>
+          l.callTool("gripeventsctl_synthetic_echo", ECHO_ARGS),
+        );
+        expect(result.isError).toBeFalsy();
+        expect(textOf(result).endsWith(`\n${note}`)).toBe(true);
+        expect(result.structuredContent).toEqual(echoOutput({ ...ECHO_ARGS, page: 1, dry_run: false }));
+        expect(JSON.stringify(result.structuredContent)).not.toContain("connections list");
+        const cli = await runCli(["synthetic", "echo", "42", "--type", "1"], {
+          terminal: fakeTerminal().terminal,
+          dispatcher: agent,
+          clock: fakeClock(),
+          env: home.env,
+          operations: [operation],
+          isTTY: false,
+        });
+        expect(cli.exitCode, cli.stderr).toBe(0);
+        expect(`${textOf(result)}\n`).toBe(cli.stdout);
+      });
+    });
+
     it("AC-12: over a home with no config, a needsSession false tool succeeds and a needsSession true tool is isError no-session naming the sign-in command, with no request", async () => {
       await withTempHome(async (home) => {
         const before = requests();
