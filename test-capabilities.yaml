@@ -65,7 +65,7 @@ capabilities:
   - id: CAP-SCHEDULE
     description: schedule info reads the documented path and passes unlisted values through
     levels: [S]
-    status: planned
+    status: active
   - id: CAP-GATE
     description: No write request leaves the process unless writes are enabled, the repeat guard is clear and a needed go-ahead is recorded, on both paths, with one critical section per write
     levels: [U, C, S, P, M]
