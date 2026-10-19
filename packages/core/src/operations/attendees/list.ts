@@ -17,16 +17,15 @@
 import { z } from "zod";
 
 import { defineOperation } from "../operation.js";
+import { containerIdOf, signalOption } from "../context.js";
 import {
   SEARCH_PAGE_SIZE,
   SEARCH_REQUEST,
   TYPE_IDS_HELP,
-  containerIdOf,
   searchEntrySchema,
   searchPageSchema,
   searchPath,
   searchQuery,
-  signalOption,
 } from "./search.js";
 
 export const attendeesListInput = z.object({

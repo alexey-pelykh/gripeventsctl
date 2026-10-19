@@ -31,15 +31,14 @@ import { redactString } from "../../lib/redact.js";
 import { GripError } from "../../transport/errors.js";
 import { type OperationContext, defineOperation } from "../operation.js";
 import { openExportFile, resolveExportPath } from "./export-file.js";
+import { containerIdOf, signalOption } from "../context.js";
 import {
   SEARCH_REQUEST,
   type SearchEntry,
   TYPE_IDS_HELP,
-  containerIdOf,
   searchPageSchema,
   searchPath,
   searchQuery,
-  signalOption,
 } from "./search.js";
 
 /** The pause between two pages, the 2026 dump's choice; not user-adjustable. */

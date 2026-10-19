@@ -21,7 +21,7 @@ import { z } from "zod";
 
 import { ApiError, WIRE_BREAKAGE_HINT } from "../../transport/errors.js";
 import { defineOperation } from "../operation.js";
-import { containerIdOf, signalOption } from "./search.js";
+import { containerIdOf, signalOption } from "../context.js";
 
 /** The platform's literal path segment for the caller's own record (`docs/api/README.md` § Vocabulary). */
 export const OWN_RECORD_SEGMENT = "user_id";
