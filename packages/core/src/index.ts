@@ -16,6 +16,7 @@ export {
   registerSecret,
 } from "./lib/redact.js";
 export { type Clock, systemClock } from "./lib/clock.js";
+export { escapeForTerminal } from "./lib/escape.js";
 export {
   ApiError,
   AuthFailedError,
