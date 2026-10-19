@@ -2,9 +2,9 @@
 // Copyright (C) 2026 Oleksii PELYKH
 
 /**
- * What every operation with a session reads from its `OperationContext`: the container id of the stored session and
- * the client's `signal` option. They sat in `attendees/search.ts` while the attendees group was the only one with a
- * session-bound path; the match group reads them too, so they live beside `operation.ts`.
+ * What an operation whose path carries the container id reads from its `OperationContext`: the container id of the
+ * stored session and the client's `signal` option. They sat in `attendees/search.ts` while the attendees group was
+ * the only one with such a path; the match group reads them too, so they live beside `operation.ts`.
  */
 
 import { NoSessionError } from "../transport/errors.js";
