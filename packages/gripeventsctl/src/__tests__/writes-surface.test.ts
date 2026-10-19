@@ -6,7 +6,8 @@
  * Criteria), driven through the real program (`runCli`) over the registry, a temporary home holding a synthetic
  * session, `mockGrip()` serving the envelope builders, a fake clock whose waits end at once, and a fake terminal
  * that types the challenge code back. The cases the pre-authored oracles (`writes.oracle.test.ts`,
- * `writes-bodies.oracle.test.ts`) do not carry: `--dry-run` on each write, with the plan shown, the request equal
+ * `writes-bodies.oracle.test.ts`) do not carry, plus the repeat-guard case they do (S21), repeated here for the exact
+ * time in the hint and the guard verdict: `--dry-run` on each write, with the plan shown, the request equal
  * to the real one, a registered secret redacted, and no prompt; safe mode on each write while a read still runs; the
  * repeat guard before the status read and clear for another kind; no session and a 401 on the status read or the
  * POST; the 429 schedule on the POST under the lock, the request retried unchanged; a stray `--message` on `interest
@@ -70,7 +71,7 @@ function bodyText(call: CallLog): string {
 }
 
 /** A clock whose waits end at once, advancing it and recording each wait. */
-function advancingClock(start = T0): Clock & { sleeps: number[] } {
+function advancingClock(start = T0, onSleep?: () => void): Clock & { sleeps: number[] } {
   let current = start;
   const sleeps: number[] = [];
   return {
@@ -78,6 +79,7 @@ function advancingClock(start = T0): Clock & { sleeps: number[] } {
     now: () => new Date(current),
     sleep: (ms) => {
       sleeps.push(ms);
+      onSleep?.();
       current += ms;
       return Promise.resolve();
     },
@@ -146,9 +148,13 @@ function jsonOf(text: string): Record<string, unknown> {
 }
 
 /** One CLI run through the real program over the registry; `--json` unless `human`. */
-async function cli(home: TempHome, argv: string[], options: { tty?: boolean; human?: boolean } = {}): Promise<Run> {
+async function cli(
+  home: TempHome,
+  argv: string[],
+  options: { tty?: boolean; human?: boolean; onSleep?: () => void } = {},
+): Promise<Run> {
   const terminal = terminalOf(options.tty ?? false);
-  const clock = advancingClock();
+  const clock = advancingClock(T0, options.onSleep);
   const run = await runCli(options.human === true ? argv : ["--json", ...argv], {
     terminal: terminal.terminal,
     dispatcher: agent,
@@ -428,8 +434,11 @@ describe("[CAP-WRITES] [CAP-GATE] [CAP-THROTTLE] the CLI path of the three gated
         lockedDuring.push(existsSync(paths(home).lockDir));
         return matchAnswer201(0);
       });
+      const lockedWhileWaiting: boolean[] = [];
       let before = calls().length;
-      const sent = await cli(home, ["interest", "show", "42"]);
+      const sent = await cli(home, ["interest", "show", "42"], {
+        onSleep: () => lockedWhileWaiting.push(existsSync(paths(home).lockDir)),
+      });
       expect(sent.exitCode, sent.stderr).toBe(0);
       expect(sent.json).toMatchObject({ outcome: "sent", connection: 0 });
       expect(sent.sleeps).toEqual([60_000, 120_000, 240_000]);
@@ -441,9 +450,13 @@ describe("[CAP-WRITES] [CAP-GATE] [CAP-THROTTLE] the CLI path of the three gated
         `POST ${YES_PATH}`,
         `POST ${YES_PATH}`,
       ]);
-      const bodies = new Set(recorded.slice(1).map((call) => `${call.fullUrl}\n${bodyText(call)}`));
-      expect(bodies.size, "the same request, unchanged").toBe(1);
-      expect(lockedDuring).toEqual([true, true, true, true]);
+      // Byte-equal: the URL, the body and every header, the authorisation included, so nothing rotates between tries.
+      const fingerprints = new Set(
+        recorded.slice(1).map((call) => `${call.fullUrl}\n${bodyText(call)}\n${JSON.stringify(call.headers)}`),
+      );
+      expect(fingerprints.size, "the same request, unchanged").toBe(1);
+      expect(lockedDuring, "the lock at each POST").toEqual([true, true, true, true]);
+      expect(lockedWhileWaiting, "the lock through each wait").toEqual([true, true, true]);
       expect(existsSync(paths(home).lockDir), "released after the append").toBe(false);
       expect(await readSendLog(paths(home).sendLog)).toEqual([
         expect.objectContaining({ outcome: "sent", http_status: 201, connection: 0 }),
