@@ -62,6 +62,7 @@ import {
   statusNotNoneHint,
   writeBusyHint,
 } from "../gate/gate.js";
+import { type WriteLockFn, withWriteLock } from "../gate/lock.js";
 import { REFUSALS } from "../gate/send-log.js";
 
 const agent = mockGrip();
@@ -685,6 +686,66 @@ describe("[CAP-GATE] no write request leaves the process unless writes are enabl
         expect(String(line?.response).length).toBeLessThanOrEqual(1000);
         expect(String(line?.response)).not.toContain(token);
         expect(await readFile(g.paths.sendLog, "utf8")).not.toContain(token);
+      });
+    });
+
+    it("C11: a lock lost to another writer after the guard is write-busy: nothing is consumed, nothing is sent, nothing is appended, and the release is swallowed", async () => {
+      await withTempHome(async (home) => {
+        // A lock whose compromise the test fires itself, from inside the status read: the holder stalled, another
+        // writer took the lock, and the library's refresh timer reported it.
+        let fire: (() => void) | undefined;
+        let released = 0;
+        const lock: WriteLockFn = (_path, options) => {
+          fire = () => {
+            options.onCompromised(new Error("Unable to update lock within the stale threshold"));
+          };
+          return Promise.resolve(() => {
+            released += 1;
+            return Promise.reject(new Error("Lock is already released"));
+          });
+        };
+        const g = await gateIn(home, true);
+        const seen = await withWriteLock(
+          g.paths.writeLock,
+          (handle) => {
+            const before = handle.compromised();
+            fire?.();
+            return Promise.resolve([before, handle.compromised()]);
+          },
+          { lock },
+        );
+        expect(seen).toEqual({ taken: true, value: [false, true] });
+        expect(released).toBe(1);
+
+        const gate = createWriteGate({
+          config: await loadConfig({ env: home.env }),
+          paths: g.paths,
+          clock: advancingClock(T0),
+          source: "mcp",
+          stderr: g.stderr,
+          lock,
+        });
+        const id = await approvedRecord(g, 42, MESSAGE);
+        const sends = { count: 0 };
+        const result = await gate.execute(
+          spec(g, {
+            sends,
+            readStatus: () => {
+              fire?.();
+              return Promise.resolve("has_match_none");
+            },
+          }),
+        );
+        expect(result).toMatchObject({
+          outcome: "refused",
+          refusal: "write-busy",
+          hint: writeBusyHint(g.paths.writeLock),
+        });
+        expect(sends.count).toBe(0);
+        expect(await readSendLogLines(g.paths.sendLog)).toEqual([]);
+        expect(
+          (await readJournalLines(g.paths.goAheads)).filter((line) => line.id === id).map((line) => line.event),
+        ).toEqual(["proposed", "approved"]);
       });
     });
 

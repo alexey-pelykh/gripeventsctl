@@ -149,8 +149,10 @@ export function printWorkTreeWarnings(context: CliContext, loaded: LoadResult): 
 
 /**
  * The CLI's terminal confirmation (issue #16 § The terminal confirmation): interactive only where the terminal
- * reports a TTY on stdin and on stdout, which `execute()` checks before calling `run`; the view and the prompt go
- * through the terminal to stderr, never to the CLI's stdout stream, so `--json` stays one document. No `--yes` flag,
+ * reports a TTY on stdin and on stdout, which `execute()` checks before calling `run`; the view goes through the
+ * terminal to stderr, never to the CLI's stdout stream, and the prompt is the terminal's own, so the `--json` document
+ * on stdout is never interleaved with the view (the real prompt draws on stdout as every prompt does, at a TTY only).
+ * No `--yes` flag,
  * environment variable or piped answer stands in for it: with a non-TTY stdin the gate takes the proposal path.
  */
 export function terminalConfirmation(context: CliContext): TerminalConfirmation {
