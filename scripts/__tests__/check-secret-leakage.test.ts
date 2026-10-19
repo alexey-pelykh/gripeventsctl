@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Oleksii PELYKH
 
 /**
- * Repository-gate cases for `scripts/check-secret-leakage.ts` (CAP-REDACT R15 to R19). The script
- * runs `main()` at import and scans the tracked files of the current working directory, so every
+ * Repository-gate cases for `scripts/check-secret-leakage.ts` (CAP-REDACT R15 to R28, and R29 to R36 for its
+ * `--history` pass). The script runs `main()` when invoked and scans the current working directory, so every
  * case spawns it as a process with `cwd` set to a temporary git repository holding committed
  * fixture secrets. The secret values are generated per run; none is a literal in this file.
  */
@@ -142,9 +142,14 @@ function commitAll(): void {
   git("commit", "-q", "-m", "fixtures");
 }
 
-function runCheck(): { status: number | null; stderr: string; stdout: string } {
-  const run = spawnSync(process.execPath, [TSX_CLI, SCRIPT], {
-    cwd: repo,
+/** The stdout of `git <args>` in `cwd` (the fixture repository by default), its trailing newline trimmed. */
+function gitOutput(args: string[], cwd: string = repo): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function runCheck(args: string[] = [], cwd: string = repo): { status: number | null; stderr: string; stdout: string } {
+  const run = spawnSync(process.execPath, [TSX_CLI, SCRIPT, ...args], {
+    cwd,
     encoding: "utf8",
     env: { ...process.env, FORCE_COLOR: "0" },
     timeout: 60_000,
@@ -416,6 +421,162 @@ describe("[CAP-REDACT] the secret-leakage gate over a temporary repository", () 
     expect(result.stderr).toMatch(/^fixtures\/first\\u2028second\\u202ethird\\u0085\.txt:1: secret-shaped value \[/mu);
     expect(result.stderr).not.toMatch(/[\u0085\u2028\u202e]/u);
     expect(result.stderr).not.toContain(secrets.sessionToken);
+  });
+
+  it("R29: with --history, flags a session token a later commit deleted, naming the blob, the path and the commit that introduced it, never the value", () => {
+    const { sessionToken } = fixtureSecrets();
+    write("fixtures/capture.json", `{"user_token": "${sessionToken}"}\n`);
+    commitAll();
+    const introducing = gitOutput(["rev-parse", "HEAD"]);
+    const blob = gitOutput(["rev-parse", "HEAD:fixtures/capture.json"]);
+    git("rm", "-q", "fixtures/capture.json");
+    git("commit", "-q", "-m", "drop the capture");
+
+    const result = runCheck(["--history"]);
+
+    expect(result.status).toBe(1);
+    const findings = result.stderr.split("\n").filter((line) => line.includes("secret-shaped value ["));
+    expect(findings).toHaveLength(1);
+    const line = findings[0] ?? "";
+    const match =
+      /^history: ([0-9a-f]{40}) fixtures\/capture\.json:1: secret-shaped value \[a session token after user_token or X-Authorization\]: (.{1,12})… \((\d+) chars\)$/u.exec(
+        line,
+      );
+    expect(match, line).not.toBeNull();
+    expect(match?.[1]).toBe(blob);
+    const prefix = match?.[2] ?? "";
+    for (let start = 0; start + RUN <= sessionToken.length; start += 1) {
+      expect(prefix, `${line} holds a run of the session token`).not.toContain(sessionToken.slice(start, start + RUN));
+    }
+    expect(gitOutput(["rev-list", "--max-parents=0", "HEAD"])).toBe(introducing);
+    expect(result.stderr).toContain(`history: blob ${blob} first introduced by commit ${introducing}\n`);
+    expect(result.stderr).toContain("FAIL: found 1 secret-shaped value(s) in the git history");
+    expect(result.stderr).not.toContain(sessionToken);
+    expect(result.stdout).not.toContain(sessionToken);
+  });
+
+  it("R30: with --history on a shallow clone, refuses with the fetch-depth message, exits 2 and reports no history finding", () => {
+    const { sessionToken } = fixtureSecrets();
+    write("fixtures/capture.json", `{"user_token": "${sessionToken}"}\n`);
+    commitAll();
+    git("rm", "-q", "fixtures/capture.json");
+    git("commit", "-q", "-m", "drop the capture");
+    const clone = mkdtempSync(join(tmpdir(), "gripeventsctl-leakage-shallow-"));
+    try {
+      // The file:// form is what makes --depth apply to a local clone; a plain path copies the whole repository.
+      execFileSync("git", ["clone", "-q", "--depth", "1", `file://${repo}`, clone], { stdio: "ignore" });
+      expect(gitOutput(["rev-parse", "--is-shallow-repository"], clone)).toBe("true");
+
+      const result = runCheck(["--history"], clone);
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain("history scan needs a full clone (fetch-depth: 0)\n");
+      expect(result.stderr).not.toMatch(/^history: /mu);
+      expect(result.stderr).not.toContain(sessionToken);
+    } finally {
+      rmSync(clone, { recursive: true, force: true });
+    }
+  });
+
+  it("R31: with --history, skips the paths the tree scan skips, in every commit: the redaction test, .tmp/ and a lockfile", () => {
+    const secrets = fixtureSecrets();
+    write("packages/core/src/__tests__/redact.test.ts", `const header = "X-Authorization: ${secrets.sessionToken}";\n`);
+    write(".tmp/captured.txt", `{"user_token": "${secrets.sessionToken}"}\n`);
+    write("pnpm-lock.yaml", `token=${secrets.chatToken}\n`);
+    write("clean.txt", "nothing secret here\n");
+    commitAll();
+    write("clean.txt", "nothing secret here, still\n");
+    commitAll();
+
+    const result = runCheck(["--history"]);
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("R32: without --history, a value only the history holds is not looked for: exit 0 with nothing printed", () => {
+    const { sessionToken } = fixtureSecrets();
+    write("fixtures/capture.json", `{"user_token": "${sessionToken}"}\n`);
+    commitAll();
+    git("rm", "-q", "fixtures/capture.json");
+    git("commit", "-q", "-m", "drop the capture");
+
+    const result = runCheck();
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("R33: with --history, skips a blob over 1 MiB, which the tree scan still reads whole", () => {
+    const { sessionToken } = fixtureSecrets();
+    const filler = `${"synthetic filler line of a large capture\n".repeat(40_000)}`;
+    expect(filler.length).toBeGreaterThan(1024 * 1024);
+    write("fixtures/large-capture.txt", `${filler}X-Authorization: ${sessionToken}\n`);
+    commitAll();
+
+    const present = runCheck(["--history"]);
+
+    expect(present.status).toBe(1);
+    expect(present.stderr).toContain("fixtures/large-capture.txt:40001: secret-shaped value [");
+    expect(present.stderr).not.toMatch(/^history: /mu);
+    expect(present.stderr).not.toContain("in the git history");
+
+    git("rm", "-q", "fixtures/large-capture.txt");
+    git("commit", "-q", "-m", "drop the large capture");
+
+    const deleted = runCheck(["--history"]);
+
+    expect(deleted.stderr).toBe("");
+    expect(deleted.status).toBe(0);
+  });
+
+  it("R34: with --history, scans a blob under a path in scope even when the same blob also sits at an excluded path", () => {
+    // The blob id is the same at both paths; keeping it under the excluded path would drop it from the scan.
+    const { sessionToken } = fixtureSecrets();
+    const content = `X-Authorization: ${sessionToken}\n`;
+    write("packages/core/src/__tests__/redact.test.ts", content);
+    write("fixtures/copy.txt", content);
+    commitAll();
+    git("rm", "-q", "fixtures/copy.txt");
+    git("commit", "-q", "-m", "drop the copy");
+
+    const result = runCheck(["--history"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/^history: [0-9a-f]{40} fixtures\/copy\.txt:1: secret-shaped value \[/mu);
+    expect(result.stderr).not.toContain("redact.test.ts");
+    expect(result.stderr).not.toContain(sessionToken);
+  });
+
+  it("R35: with --history, a blob git cannot read is a git failure: exit 2, never clean", () => {
+    write("clean.txt", "nothing secret here\n");
+    write("fixtures/gone.txt", "nothing secret here either\n");
+    commitAll();
+    const blob = gitOutput(["rev-parse", "HEAD:fixtures/gone.txt"]);
+    git("rm", "-q", "fixtures/gone.txt");
+    git("commit", "-q", "-m", "drop the file");
+    // The commits and trees stay; only the loose object of the deleted file's blob goes.
+    rmSync(join(repo, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+
+    const result = runCheck(["--history"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(
+      /^history scan: git cat-file --batch could not read an object: [0-9a-f]{40} missing$/mu,
+    );
+  });
+
+  it("R36: an unknown argument prints the usage line and exits 2 without scanning", () => {
+    const { sessionToken } = fixtureSecrets();
+    write("fixtures/capture.json", `{"user_token": "${sessionToken}"}\n`);
+    commitAll();
+
+    const result = runCheck(["--nope"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe("usage: check-secret-leakage [--history] (unknown argument --nope)\n");
+    expect(result.stdout).toBe("");
   });
 
   it("R19: ordinary prose after `Basic ` in a committed file is not flagged: a word never holds a digit, `+`, `/` or `=`", () => {
