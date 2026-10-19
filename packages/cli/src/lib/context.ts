@@ -20,6 +20,7 @@ import {
 } from "@gripeventsctl/core";
 import type { Dispatcher } from "undici";
 
+import { INTERRUPTED_MESSAGE } from "./exit-codes.js";
 import { type Terminal, realTerminal } from "./terminal.js";
 
 export interface CliOptions {
@@ -39,6 +40,11 @@ export interface CliOptions {
   operations?: readonly Operation[];
   /** Whether stdout counts as a TTY for the human renderings (box-drawing, colour); the terminal's own flag by default. */
   isTTY?: boolean;
+  /**
+   * The signal every operation run carries as `ctx.signal`, in place of the program's own, which aborts on the first
+   * SIGINT while an operation runs; a test aborts it to drive a cancellation without a process signal (issue #11).
+   */
+  signal?: AbortSignal;
 }
 
 export interface CliContext {
@@ -53,6 +59,20 @@ export interface CliContext {
   isTTY: boolean;
   /** The one `GripClient` of this program, built on first use over the context's dispatcher, clock, environment and stderr. */
   client(): GripClient;
+  /**
+   * The signal an operation run carries as `ctx.signal`: the injected one, or the program's own, which the first
+   * SIGINT aborts while `armInterrupt()` holds it. A request the operation's client call is waiting to send is then
+   * never sent, a wait ends at once, and a request already sent runs to its answer.
+   */
+  signal: AbortSignal;
+  /**
+   * Arm the program's signal on the process's next SIGINT for the duration of an operation run, and return the
+   * disarm. A no-op where the signal was injected. One SIGINT is consumed this way; a second one, with no listener
+   * left, ends the process by Node's default.
+   */
+  armInterrupt(): () => void;
+  /** The exit code the last completed operation chose through `op.exitCode`; 0 until one does. */
+  outcome: { exitCode: number };
 }
 
 /** The context `options` gives, with the process's own terminal, streams, clock, environment and platform as defaults. */
@@ -63,6 +83,7 @@ export function createContext(options: CliOptions = {}): CliContext {
   const clock = options.clock ?? systemClock;
   const env = options.env ?? process.env;
   let client: GripClient | undefined;
+  const controller = options.signal === undefined ? new AbortController() : undefined;
   return {
     terminal,
     stdout: options.stdout ?? process.stdout,
@@ -77,6 +98,18 @@ export function createContext(options: CliOptions = {}): CliContext {
       client ??= new GripClient({ ...(dispatcher === undefined ? {} : { dispatcher }), clock, env, stderr });
       return client;
     },
+    signal: options.signal ?? (controller as AbortController).signal,
+    armInterrupt: () => {
+      if (controller === undefined) return () => undefined;
+      const onInterrupt = (): void => {
+        controller.abort(new Error(INTERRUPTED_MESSAGE));
+      };
+      process.once("SIGINT", onInterrupt);
+      return () => {
+        process.removeListener("SIGINT", onInterrupt);
+      };
+    },
+    outcome: { exitCode: 0 },
   };
 }
 

@@ -10,7 +10,8 @@
  *   what the signed-in attendee's own session already sees, and that results include text written by other attendees
  *   to treat as data; for a write, that it notifies a person and runs only with writes enabled, behind the repeat
  *   guard, into the send log, and never with an assistant-written message without a recorded go-ahead, and that only
- *   the user's own request justifies a call.
+ *   the user's own request justifies a call; then `op.mcp.descriptionSuffix` where the operation carries one (the
+ *   dump's account-risk notice, issue #11).
  * - `annotations`: reads `{ readOnlyHint: true }`; writes `{ destructiveHint: true, openWorldHint: true }`.
  * - `inputSchema`: `op.input`, the same zod object the CLI builder reads; keys stay `snake_case`. No input schema has
  *   a key named `password`, `token`, `config` or `config_path`: the server never takes a password, a token or a
@@ -21,7 +22,11 @@
  *   two surfaces' output.
  * - The handler takes its turn (`deps.inTurn()`: one call at a time per server, in arrival order, so two calls issued
  *   together reach the process-wide request queue in the order they were issued), builds the `OperationContext`
- *   (`lib/context.ts`), runs the operation, validates the result with the output schema, and returns
+ *   (`lib/context.ts`) with the SDK's request-handler extras (issue #11 § The MCP context for long calls): `signal`,
+ *   which the host's `notifications/cancelled` aborts, and `progress`, present only when the call carried a
+ *   `progressToken`, sending `notifications/progress` with that token, `progress: done` and `message`. It runs the
+ *   operation, validates the result with the output schema (`op.exitCode` is ignored: a completed run is a normal
+ *   result), and returns
  *   `{ content: [{ type: "text", text }], structuredContent }`, where `text` is
  *   the same human rendering the CLI prints off a TTY (plain rows or key-value lines, escaped, redacted, never
  *   coloured) and `structuredContent` is the validated output, wrapped when an array, with every string value passed
@@ -35,7 +40,7 @@ import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
-import { type ToolDeps, operationContext } from "./context.js";
+import { type CallExtras, type ToolDeps, operationContext } from "./context.js";
 import { errorResult } from "./error-result.js";
 
 export const READ_POSTURE = "It reads what the signed-in attendee's own session already sees.";
@@ -49,12 +54,16 @@ export function toolName(op: Pick<Operation, "group" | "verb">): string {
   return `gripeventsctl_${op.group}_${op.verb}`;
 }
 
-/** The operation's sentence, with a full stop where it has none, then the posture and the boundary of its kind. */
-export function toolDescription(op: Pick<Operation, "description" | "kind">): string {
+/**
+ * The operation's sentence, with a full stop where it has none, then the posture and the boundary of its kind, then
+ * the operation's own suffix where it carries one.
+ */
+export function toolDescription(op: Pick<Operation, "description" | "kind" | "mcp">): string {
   const first = /[.!?]$/.test(op.description) ? op.description : `${op.description}.`;
-  return op.kind === "read"
-    ? `${first} ${READ_POSTURE} ${READ_BOUNDARY}`
-    : `${first} ${WRITE_POSTURE} ${WRITE_BOUNDARY}`;
+  const sentences =
+    op.kind === "read" ? `${first} ${READ_POSTURE} ${READ_BOUNDARY}` : `${first} ${WRITE_POSTURE} ${WRITE_BOUNDARY}`;
+  const suffix = op.mcp?.descriptionSuffix;
+  return suffix === undefined || suffix === "" ? sentences : `${sentences} ${suffix}`;
 }
 
 export function toolAnnotations(op: Pick<Operation, "kind">): ToolAnnotations {
@@ -82,7 +91,7 @@ export function toolFromOperation(server: McpServer, op: Operation, deps: ToolDe
       outputSchema: toolOutputSchema(op),
       annotations: toolAnnotations(op),
     },
-    async (args): Promise<CallToolResult> => {
+    async (args, extra): Promise<CallToolResult> => {
       try {
         const parsed = op.input.safeParse(args);
         if (!parsed.success) {
@@ -90,8 +99,22 @@ export function toolFromOperation(server: McpServer, op: Operation, deps: ToolDe
           const path = issue === undefined ? "input" : issue.path.map(String).join(".") || "input";
           return errorResult(new UsageError(`${path}: ${issue?.message ?? "invalid arguments"}`));
         }
+        const progressToken = extra._meta?.progressToken;
+        const call: CallExtras = {
+          signal: extra.signal,
+          ...(progressToken === undefined
+            ? {}
+            : {
+                progress: async (done: number, message: string): Promise<void> => {
+                  await extra.sendNotification({
+                    method: "notifications/progress",
+                    params: { progressToken, progress: done, message },
+                  });
+                },
+              }),
+        };
         return await deps.inTurn(async (): Promise<CallToolResult> => {
-          const ctx = await operationContext(deps, op);
+          const ctx = await operationContext(deps, op, call);
           const result = await op.run(ctx, parsed.data);
           const output = validateOutput(op, result);
           const structuredContent = redactOutput(wrapped ? { items: output } : output) as Record<string, unknown>;

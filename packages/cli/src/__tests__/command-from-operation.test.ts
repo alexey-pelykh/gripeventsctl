@@ -30,7 +30,7 @@ import {
   syntheticInput,
   syntheticOperation,
 } from "../../../core/src/__tests__/fixtures/synthetic-operation.js";
-import { buildProgram } from "../index.js";
+import { EXIT_CODES, INTERRUPTED_EXIT_CODE, buildProgram } from "../index.js";
 
 const agent = mockGrip();
 
@@ -403,6 +403,156 @@ describe("[CAP-PARITY] [CAP-OUTPUT] the CLI builder: one leaf per operation by t
         expect(closed.stderr).toContain("no session");
         expect(closed.stderr).toContain("hint: gripeventsctl auth signin <slug>");
         expect(requests() - before).toBe(0);
+      });
+    });
+  });
+
+  describe("issue #11 additions: exitCode, the signal and the help text from the schema", () => {
+    it("the exit code of a completed run is op.exitCode(output), 0 where the operation sets none, with the output still printed", async () => {
+      await withTempHome(async (home) => {
+        const chooses = syntheticOperation({ run: (_ctx, input) => Promise.resolve(echoOutput(input)) });
+        chooses.exitCode = (output) => ((output as { page: number }).page === 2 ? 130 : 5);
+        const two = await runCli(["synthetic", "echo", "42", "--type", "1", "--page", "2"], io(home, [chooses]));
+        expect(two.exitCode).toBe(130);
+        expect(two.stdout).toContain("page: 2");
+        const one = await runCli(["--json", "synthetic", "echo", "42", "--type", "1"], io(home, [chooses]));
+        expect(one.exitCode).toBe(5);
+        expect((JSON.parse(one.stdout) as { page: number }).page).toBe(1);
+        const none = await runCli(["synthetic", "echo", "42", "--type", "1"], io(home, [syntheticOperation()]));
+        expect(none.exitCode).toBe(0);
+      });
+    });
+
+    it("the dump's own exit-code map agrees with the CLI's table for every error kind it names", () => {
+      const dump = OPERATIONS.find((op) => op.group === "attendees" && op.verb === "dump");
+      expect(dump).toBeDefined();
+      const stopping: GripErrorKind[] = [
+        "auth-failed",
+        "gated-type",
+        "throttled",
+        "load-balancer-rejected",
+        "network",
+        "api",
+      ];
+      for (const kind of stopping) {
+        const output = { pages: 0, entries: 0, stopped_on: kind, out: "/tmp/export.jsonl", hint: null };
+        expect(dump?.exitCode?.(output), kind).toBe(EXIT_CODES[kind]);
+      }
+      expect(dump?.exitCode?.({ pages: 0, entries: 0, stopped_on: "cancelled", out: "/tmp/e.jsonl", hint: null })).toBe(
+        INTERRUPTED_EXIT_CODE,
+      );
+      expect(INTERRUPTED_EXIT_CODE).toBe(130);
+    });
+
+    it("the context carries the injected signal as ctx.signal and no progress; an operation that ends on it returns normally", async () => {
+      await withTempHome(async (home) => {
+        const seen: { signal: boolean; aborted: boolean; progress: boolean }[] = [];
+        const controller = new AbortController();
+        const operation = syntheticOperation({
+          run: (ctx, input) => {
+            seen.push({
+              signal: ctx.signal !== undefined,
+              aborted: ctx.signal?.aborted === true,
+              progress: ctx.progress !== undefined,
+            });
+            controller.abort();
+            seen.push({
+              signal: ctx.signal !== undefined,
+              aborted: ctx.signal?.aborted === true,
+              progress: ctx.progress !== undefined,
+            });
+            return Promise.resolve(echoOutput(input));
+          },
+        });
+        const result = await runCli(
+          ["synthetic", "echo", "42", "--type", "1"],
+          io(home, [operation], { signal: controller.signal }),
+        );
+        expect(result.exitCode, result.stderr).toBe(0);
+        expect(seen).toEqual([
+          { signal: true, aborted: false, progress: false },
+          { signal: true, aborted: true, progress: false },
+        ]);
+      });
+    });
+
+    it("without an injected signal the context carries the program's own, armed on SIGINT only while the operation runs", async () => {
+      await withTempHome(async (home) => {
+        const listenersBefore = process.listenerCount("SIGINT");
+        let duringRun = -1;
+        const operation = syntheticOperation({
+          run: (ctx, input) => {
+            duringRun = process.listenerCount("SIGINT");
+            expect(ctx.signal).toBeInstanceOf(AbortSignal);
+            expect(ctx.signal?.aborted).toBe(false);
+            return Promise.resolve(echoOutput(input));
+          },
+        });
+        const result = await runCli(["synthetic", "echo", "42", "--type", "1"], io(home, [operation]));
+        expect(result.exitCode, result.stderr).toBe(0);
+        expect(duringRun).toBe(listenersBefore + 1);
+        expect(process.listenerCount("SIGINT")).toBe(listenersBefore);
+      });
+    });
+
+    it("a run that rejects with the signal's own reason prints `interrupted` and exits 130, in the human and the --json form", async () => {
+      await withTempHome(async (home) => {
+        const controller = new AbortController();
+        const reason = new Error("interrupted");
+        const operation = syntheticOperation({
+          run: () => {
+            controller.abort(reason);
+            return Promise.reject(reason);
+          },
+        });
+        const human = await runCli(
+          ["synthetic", "echo", "42", "--type", "1"],
+          io(home, [operation], { signal: controller.signal }),
+        );
+        expect(human.exitCode).toBe(130);
+        expect(human.stdout).toBe("");
+        expect(human.stderr).toBe("interrupted\n");
+        const again = new AbortController();
+        const wrapped = syntheticOperation({
+          run: () => {
+            again.abort("a text reason");
+            return Promise.reject(new Error("the call was cancelled", { cause: "a text reason" }));
+          },
+        });
+        const machine = await runCli(
+          ["--json", "synthetic", "echo", "42", "--type", "1"],
+          io(home, [wrapped], { signal: again.signal }),
+        );
+        expect(machine.exitCode).toBe(130);
+        expect(JSON.parse(machine.stderr)).toEqual({
+          error: { kind: "interrupted", message: "interrupted", hint: "" },
+        });
+        // The same rejection without an aborted signal is an unexpected error, exit 1.
+        const plain = syntheticOperation({ run: () => Promise.reject(new Error("interrupted")) });
+        const unexpected = await runCli(["synthetic", "echo", "42", "--type", "1"], io(home, [plain]));
+        expect(unexpected.exitCode).toBe(1);
+      });
+    });
+
+    it("a zod .describe() text becomes the help text of the argument or option, and the bare key stays where there is none", async () => {
+      await withTempHome(async (home) => {
+        const described = syntheticOperation();
+        described.input = z.object({
+          thing_id: syntheticInput.shape.thing_id.describe(
+            "a thing id; user_id is your own record and me is its alias",
+          ),
+          type_ids: syntheticInput.shape.type_ids.describe("the type ids, comma-separated"),
+          page: syntheticInput.shape.page,
+          dry_run: syntheticInput.shape.dry_run.describe("send nothing"),
+          message: syntheticInput.shape.message,
+        });
+        const help = await runCli(["synthetic", "echo", "--help"], io(home, [described]));
+        expect(help.exitCode).toBe(0);
+        expect(help.stdout).toContain("user_id is your own record and me is its alias");
+        expect(help.stdout).toContain("the type ids, comma-separated");
+        expect(help.stdout).toContain("send nothing");
+        expect(help.stdout).toMatch(/--page <n>\s+page \(default: 1\)/);
+        expect(help.stdout).toMatch(/--message <text>\s+message/);
       });
     });
   });

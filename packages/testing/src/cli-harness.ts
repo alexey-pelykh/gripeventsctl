@@ -21,11 +21,12 @@ import { fileURLToPath } from "node:url";
 
 import { captureProcessOutput } from "./capture-output.js";
 import type { Clock } from "./fake-clock.js";
-import type { Terminal } from "./terminal.js";
+import { type Terminal, fakeTerminal } from "./terminal.js";
 
 /** The seams the command takes from the harness instead of the process (issue #7, the oracle's `RunCliIo`). */
 export interface RunCliIo {
-  terminal: Terminal;
+  /** The terminal the command prompts on and writes through; a fresh `fakeTerminal()` off a TTY by default (issue #11). */
+  terminal?: Terminal;
   /** The undici dispatcher the client is given; a `MockAgent` in a test. */
   dispatcher: unknown;
   clock: Clock;
@@ -36,6 +37,11 @@ export interface RunCliIo {
   operations?: readonly unknown[];
   /** Whether stdout counts as a TTY for the human renderings; the terminal's own flag by default (issue #9). */
   isTTY?: boolean;
+  /**
+   * The signal the operation context carries as `ctx.signal`, in place of the one the program arms on SIGINT: a test
+   * aborts it to drive a cancellation without a process signal (issue #11).
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunCliResult {
@@ -62,6 +68,7 @@ interface CliModule {
       platform?: NodeJS.Platform;
       operations?: readonly unknown[];
       isTTY?: boolean;
+      signal?: AbortSignal;
     },
   ): Promise<{ exitCode: number; error?: unknown }>;
 }
@@ -97,7 +104,7 @@ export async function runCli(argv: readonly string[], io: RunCliIo): Promise<Run
   const stderr = new Capture();
   const run = await captureProcessOutput(() =>
     module.runProgram(argv, {
-      terminal: io.terminal,
+      terminal: io.terminal ?? fakeTerminal().terminal,
       stdout,
       stderr,
       ...(io.dispatcher === undefined ? {} : { dispatcher: io.dispatcher }),
@@ -106,6 +113,7 @@ export async function runCli(argv: readonly string[], io: RunCliIo): Promise<Run
       ...(io.platform === undefined ? {} : { platform: io.platform }),
       ...(io.operations === undefined ? {} : { operations: io.operations }),
       ...(io.isTTY === undefined ? {} : { isTTY: io.isTTY }),
+      ...(io.signal === undefined ? {} : { signal: io.signal }),
     }),
   );
   const result = run.result;

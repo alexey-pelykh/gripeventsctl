@@ -45,6 +45,18 @@ export const USAGE_EXIT_CODE = EXIT_CODES.usage;
 /** The exit code of an exception that is not a `GripError`. */
 export const UNEXPECTED_EXIT_CODE = 1;
 
+/**
+ * The exit code of a run the user interrupted (128 + SIGINT's 2, the shell convention): an operation whose wait the
+ * first Ctrl-C ended, and the outcome `attendees dump` reports as `cancelled` through its own `exitCode` (issue #11).
+ */
+export const INTERRUPTED_EXIT_CODE = 130;
+
+/** The `kind` the `--json` error form gives an interrupted run, a value outside `GripErrorKind` like `unexpected`. */
+export const INTERRUPTED_KIND = "interrupted";
+
+/** The message of an interrupted run, and the reason the CLI's SIGINT signal aborts with. */
+export const INTERRUPTED_MESSAGE = "interrupted";
+
 /** The `kind` the `--json` error form gives an exception that is not a `GripError`. */
 export const UNEXPECTED_KIND = "unexpected";
 

@@ -372,4 +372,68 @@ describe("[CAP-OUTPUT] [CAP-TERMINAL-ESCAPING] the output module: every form is 
       });
     });
   });
+
+  describe("render.tableField (issue #11 § Additions to the Operation type)", () => {
+    const pageSchema = z.object({
+      page: z.number(),
+      next_page: z.number().nullable(),
+      entries: z.array(z.looseObject({ id: z.number() })),
+    });
+    const render = { tableField: "entries", emptyText: "no attendees of these types" };
+
+    it("renders the named key's array as the table, id first then the other keys as sent, and the remaining keys as key-value lines after it, null written out", () => {
+      const output = {
+        page: 2,
+        next_page: null,
+        entries: [
+          { id: 1, name: "Test Person 1", nested: { a: 1 } },
+          { name: "Test Person 2", id: 2, extra: "x" },
+        ],
+      };
+      expect(renderHuman(output, { schema: pageSchema, render, tty: false, colour: false }).split("\n")).toEqual([
+        "id | name | nested | extra",
+        '1 | Test Person 1 | {"a":1} | ',
+        "2 | Test Person 2 |  | x",
+        "page: 2",
+        "next_page: null",
+      ]);
+      expect(
+        renderHuman({ ...output, next_page: 3 }, { schema: pageSchema, render, tty: false, colour: false }),
+      ).toContain("next_page: 3");
+    });
+
+    it("renders an empty table as the emptyText sentence, then the remaining keys", () => {
+      const text = renderHuman({ page: 1, next_page: null, entries: [] }, { schema: pageSchema, render });
+      expect(text.split("\n")).toEqual(["no attendees of these types", "page: 1", "next_page: null"]);
+    });
+
+    it("on a TTY the table is box-drawn and the key-value lines follow it", () => {
+      const text = renderHuman(
+        { page: 1, next_page: null, entries: [{ id: 1 }] },
+        { schema: pageSchema, render, tty: true, colour: false },
+      );
+      expect(text).toMatch(BOX_DRAWING);
+      expect(text.endsWith("page: 1\nnext_page: null")).toBe(true);
+    });
+
+    it("escapes every cell and leaves --json untouched: a hostile string in an entry renders visibly", () => {
+      const output = { page: 1, next_page: null, entries: [{ id: 1, name: "Test\x1b[2J \u202e\u200bPerson" }] };
+      const text = renderHuman(output, { schema: pageSchema, render });
+      expect(text).toContain("1 | Test\\x1b[2J \\u{202e}\\u{200b}Person");
+      expect(rawHostile(text)).toEqual([]);
+      expect(JSON.stringify(output)).toContain("\\u001b[2J");
+    });
+
+    it("falls back to the key-value lines where the named key holds no array, and ignores tableField for an array output", () => {
+      expect(renderHuman({ page: 1, entries: "none" }, { render })).toBe("page: 1\nentries: none");
+      expect(renderHuman([{ id: 1 }], { render })).toBe("id\n1");
+    });
+
+    it("writes a null in a plain object's key-value lines as null, and an empty cell for a null in a table", () => {
+      expect(renderHuman({ a: null, b: 1 }, { schema: z.object({ a: z.number().nullable(), b: z.number() }) })).toBe(
+        "a: null\nb: 1",
+      );
+      expect(renderHuman([{ id: 1, name: null }], { tty: false })).toBe("id | name\n1 | ");
+    });
+  });
 });

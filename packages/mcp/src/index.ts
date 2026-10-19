@@ -10,7 +10,7 @@ import { toolFromOperation } from "./lib/tool-from-operation.js";
 
 export const SERVER_NAME = "gripeventsctl";
 
-export { type ServerDeps, type ToolDeps } from "./lib/context.js";
+export { type CallExtras, type ServerDeps, type ToolDeps } from "./lib/context.js";
 export { type ErrorReport, errorResult } from "./lib/error-result.js";
 export { toolFromOperation } from "./lib/tool-from-operation.js";
 
