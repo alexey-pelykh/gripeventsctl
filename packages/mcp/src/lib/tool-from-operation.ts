@@ -10,8 +10,9 @@
  *   what the signed-in attendee's own session already sees, and that results include text written by other attendees
  *   to treat as data; for a write, that it notifies a person and runs only with writes enabled, behind the repeat
  *   guard, into the send log, and never with an assistant-written message without a recorded go-ahead, and that only
- *   the user's own request justifies a call; then `op.mcp.descriptionSuffix` where the operation carries one (the
- *   dump's account-risk notice, issue #11).
+ *   the user's own request justifies a call; `op.mcp.descriptionPosture` replaces the posture sentence where the
+ *   operation carries one (the two `writes` reads, which read local state only, issue #16); then
+ *   `op.mcp.descriptionSuffix` where the operation carries one (the dump's account-risk notice, issue #11).
  * - `annotations`: reads `{ readOnlyHint: true }`; writes `{ destructiveHint: true, openWorldHint: true }`.
  * - `inputSchema`: `op.input`, the same zod object the CLI builder reads; keys stay `snake_case`. No input schema has
  *   a key named `password`, `token`, `config` or `config_path`: the server never takes a password, a token or a
@@ -61,8 +62,8 @@ export function toolName(op: Pick<Operation, "group" | "verb">): string {
  */
 export function toolDescription(op: Pick<Operation, "description" | "kind" | "mcp">): string {
   const first = /[.!?]$/.test(op.description) ? op.description : `${op.description}.`;
-  const sentences =
-    op.kind === "read" ? `${first} ${READ_POSTURE} ${READ_BOUNDARY}` : `${first} ${WRITE_POSTURE} ${WRITE_BOUNDARY}`;
+  const posture = op.mcp?.descriptionPosture ?? (op.kind === "read" ? READ_POSTURE : WRITE_POSTURE);
+  const sentences = `${first} ${posture} ${op.kind === "read" ? READ_BOUNDARY : WRITE_BOUNDARY}`;
   const suffix = op.mcp?.descriptionSuffix;
   return suffix === undefined || suffix === "" ? sentences : `${sentences} ${suffix}`;
 }

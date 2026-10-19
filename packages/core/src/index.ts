@@ -91,6 +91,37 @@ export {
   type RequestShape,
   defineOperation,
 } from "./operations/index.js";
+// The write gate (issue #16 § Public interface added to `@gripeventsctl/core`): the gate, the plan and result
+// schemas the writes item extends, the send log, the go-ahead journal, the write lock and the opening rule.
+export {
+  type ConfirmationView,
+  type GoAheadEvent,
+  type GoAheadRecord,
+  type Refusal,
+  type SendLogEntry,
+  type TerminalConfirmation,
+  type WriteGate,
+  type WriteGateOptions,
+  type WriteKind,
+  type WritePlan,
+  type WriteResult,
+  type WriteSpec,
+  createWriteGate,
+} from "./gate/gate.js";
+export { writePlanSchema, writeResultSchema } from "./gate/plan.js";
+export { appendSendLog, openSendLog, readSendLog, repeatGuard } from "./gate/send-log.js";
+export {
+  GO_AHEAD_TTL_MS,
+  approveGoAhead,
+  consumeGoAhead,
+  findOpenProposal,
+  foldJournal,
+  goAheadExpiresAt,
+  proposeGoAhead,
+  readJournal,
+} from "./gate/go-ahead.js";
+export { withWriteLock } from "./gate/lock.js";
+export { openAppendOnly } from "./gate/files.js";
 export {
   type ExecFileLike,
   OP_NOT_FOUND_MESSAGE,

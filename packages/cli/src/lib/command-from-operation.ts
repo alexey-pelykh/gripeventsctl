@@ -24,7 +24,8 @@
  *
  * The leaf action builds the `OperationContext` (`source: "cli"`): `loadConfig()`, the program's one `GripClient`,
  * the clock, the stderr and the signal of the context, armed on the process's first SIGINT for the duration of the
- * run (`CliContext.armInterrupt`); `progress` stays undefined, the CLI writing progress to stderr. When
+ * run (`CliContext.armInterrupt`), and the write gate over the loaded config with the terminal confirmation
+ * (`writeGateFor`, issue #16); `progress` stays undefined, the CLI writing progress to stderr. When
  * `op.needsSession` and the config has no session, it raises `no-session` (exit 3, hint `gripeventsctl auth signin
  * <slug>`) before any request. It calls `op.run`, validates the result with the output schema (a failure is the `api`
  * kind naming the field), renders it through `writeOutput` and records `op.exitCode?.(output) ?? 0` as the program's
@@ -43,7 +44,7 @@ import {
 import { Command, Option } from "commander";
 import type { z } from "zod";
 
-import { type CliContext, printWorkTreeWarnings } from "./context.js";
+import { type CliContext, printWorkTreeWarnings, writeGateFor } from "./context.js";
 import { USAGE_EXIT_CODE } from "./exit-codes.js";
 import { validateOutput, writeOutput } from "./output.js";
 
@@ -207,6 +208,7 @@ async function runOperation(
     stderr: context.stderr,
     source: "cli",
     signal: context.signal,
+    gate: writeGateFor(context, loaded),
   };
   const disarm = context.armInterrupt();
   let result: unknown;
@@ -223,11 +225,7 @@ async function runOperation(
     json,
     tty: context.isTTY,
     colour: context.isTTY && !noColor(context.env),
-    stdout: {
-      write: (text) => {
-        context.terminal.write(context.stdout, text);
-      },
-    },
+    stdout: context.stdout,
   });
 }
 

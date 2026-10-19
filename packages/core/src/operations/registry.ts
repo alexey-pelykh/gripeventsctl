@@ -17,6 +17,8 @@ import { eventsCheck } from "./events/check.js";
 import { eventsList } from "./events/list.js";
 import { matchStatus } from "./match/status.js";
 import type { Operation } from "./operation.js";
+import { writesPending } from "./writes/pending.js";
+import { writesStatus } from "./writes/status.js";
 
 /** The registry, ordered: events, attendees, match, chat, schedule, interest, writes. */
 export const OPERATIONS: readonly Operation[] = Object.freeze([
@@ -28,4 +30,6 @@ export const OPERATIONS: readonly Operation[] = Object.freeze([
   matchStatus,
   chatList,
   chatThread,
+  writesStatus,
+  writesPending,
 ]);

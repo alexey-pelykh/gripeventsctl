@@ -7,6 +7,7 @@ import { Command, CommanderError } from "commander";
 import { registerSignin } from "./commands/auth/signin.js";
 import { registerSignout } from "./commands/auth/signout.js";
 import { registerStatus } from "./commands/auth/status.js";
+import { registerWrites } from "./commands/writes/index.js";
 import { commandFromOperation } from "./lib/command-from-operation.js";
 import { type CliContext, type CliOptions, createContext } from "./lib/context.js";
 import {
@@ -55,12 +56,14 @@ const PROGRAM_DESCRIPTION =
 /**
  * Build the Commander program over `options` (the real terminal, streams, clock, environment and
  * platform by default): the `auth` group, then one leaf `<group> <verb>` per entry of
- * `options.operations` (the registry `OPERATIONS` by default), at depth two; the umbrella package
+ * `options.operations` (the registry `OPERATIONS` by default), at depth two, then the hand-written
+ * `writes go-ahead` beside the derived `writes` leaves (issue #16); the umbrella package
  * handles `gripeventsctl mcp` before this program sees argv.
  *
- * Output goes through the context's terminal: human output on stdout, errors and diagnostics on
+ * Output goes to the context's streams: human output on stdout, errors and diagnostics on
  * stderr, Commander's own output included, every stderr text through `redactString` and every
- * Commander usage error through `scrubUsageError`. Commander never calls `process.exit`:
+ * Commander usage error through `scrubUsageError`; the terminal seam carries the prompts and the
+ * screens shown beside one (issue #16), never a result. Commander never calls `process.exit`:
  * `runProgram` turns its errors into the exit code.
  */
 export function buildProgram(options: CliOptions = {}): Command {
@@ -78,10 +81,10 @@ function programFor(context: CliContext): Command {
     .showHelpAfterError()
     .configureOutput({
       writeOut: (text) => {
-        context.terminal.write(context.stdout, text);
+        context.stdout.write(text);
       },
       writeErr: (text) => {
-        context.terminal.write(context.stderr, redactString(text));
+        context.stderr.write(redactString(text));
       },
       outputError: (text, write) => {
         write(scrubUsageError(text));
@@ -89,6 +92,7 @@ function programFor(context: CliContext): Command {
     });
   registerAuth(program, context);
   registerOperations(program, context);
+  registerWrites(program, context);
   return program;
 }
 
@@ -115,6 +119,20 @@ function registerAuth(program: Command, context: CliContext): void {
   registerStatus(auth, context);
 }
 
+/** The shape of a go-ahead id: 8 bytes as base64url without padding (issue #16 § The go-ahead journal). */
+const GO_AHEAD_ID = /^[A-Za-z0-9_-]{11}$/;
+
+/**
+ * `argv` with a `--` before the id of `writes go-ahead <id>` where the id starts with `-`: one id in sixty-four does,
+ * and Commander would read it as an option. Any other argv is returned as it is.
+ */
+export function separateGoAheadId(argv: readonly string[]): string[] {
+  const index = argv.findIndex((arg, at) => arg === "go-ahead" && argv[at - 1] === "writes");
+  const id = index === -1 ? undefined : argv[index + 1];
+  if (id === undefined || !id.startsWith("-") || !GO_AHEAD_ID.test(id)) return [...argv];
+  return [...argv.slice(0, index + 1), "--", ...argv.slice(index + 1)];
+}
+
 export interface RunResult {
   exitCode: number;
   /** The error the run failed with, where it failed. */
@@ -139,7 +157,7 @@ export async function runProgram(argv: readonly string[], options: CliOptions = 
   const context = createContext(options);
   const program = programFor(context);
   try {
-    await program.parseAsync([...argv], { from: "user" });
+    await program.parseAsync(separateGoAheadId(argv), { from: "user" });
     return { exitCode: context.outcome.exitCode };
   } catch (error: unknown) {
     if (error instanceof CommanderError) {
@@ -151,10 +169,10 @@ export async function runProgram(argv: readonly string[], options: CliOptions = 
       const line = json
         ? JSON.stringify({ error: { kind: INTERRUPTED_KIND, message: INTERRUPTED_MESSAGE, hint: "" } })
         : INTERRUPTED_MESSAGE;
-      context.terminal.write(context.stderr, `${line}\n`);
+      context.stderr.write(`${line}\n`);
       return { exitCode: INTERRUPTED_EXIT_CODE, error };
     }
-    const exitCode = printError(error, { terminal: context.terminal, stderr: context.stderr, json });
+    const exitCode = printError(error, { stderr: context.stderr, json });
     return { exitCode, error };
   }
 }
