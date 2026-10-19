@@ -1108,10 +1108,13 @@ describe.skipIf(subject === undefined)(
           T0 - HOUR,
         );
         armApprovalReads(3);
+        // The approval is dated to the ask. The first run's profile read advanced the shared clock by the per-clock
+        // spacing of issue #5 (the author's ruling of 2026-10-14), so the second run's ask is read off the clock.
+        const askedAt = clock.now().getTime();
         const json = await cli(home, ["--json", "writes", "go-ahead", second], scriptedTerminal(tty, approve));
         const printed = JSON.parse(json.stdout) as { id: string; approved_at: string };
         expect(printed.id).toBe(second);
-        expect(Date.parse(printed.approved_at)).toBe(T0);
+        expect(Date.parse(printed.approved_at)).toBe(askedAt);
       });
 
       it("S13: the approval prompt shows the kind in words, the event, the target, the escaped text, its length and the hash prefix", async () => {
