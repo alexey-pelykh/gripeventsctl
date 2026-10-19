@@ -26,9 +26,11 @@
   },
   "devDependencies": {
     "@gripeventsctl/testing": "workspace:^",
+    "@modelcontextprotocol/sdk": "catalog:",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
+    "undici": "catalog:",
     "vitest": "catalog:"
   }
 }

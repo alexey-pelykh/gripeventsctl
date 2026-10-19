@@ -85,7 +85,7 @@ capabilities:
   - id: CAP-E2E
     description: The live suite, on the user's own session, verifies every read shape and the one guarded write, reports cardinality, and CI never holds a session
     levels: [U, R, L]
-    status: planned
+    status: active
   - id: CAP-RELEASE
     description: The release path publishes with provenance through least-privilege, pinned, checksum-verified steps; the ignore rules cover every local file; the matrix and floor hold
     levels: [R, M]

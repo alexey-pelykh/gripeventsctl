@@ -18,6 +18,7 @@
       "cache": false,
       "passThroughEnv": [
         "GRIPEVENTSCTL_E2E",
+        "GRIPEVENTSCTL_E2E_TYPE_ID",
         "GRIPEVENTSCTL_CONFIG_FILE",
         "XDG_CONFIG_HOME",
         "HOME",
