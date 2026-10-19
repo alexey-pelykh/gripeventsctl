@@ -80,16 +80,32 @@ export function toolDeps(deps: ServerDeps): ToolDeps {
   };
 }
 
+/** What one call brings from the SDK's request-handler extras (issue #11 § The MCP context for long calls). */
+export interface CallExtras {
+  /** Aborts when the host sends `notifications/cancelled` for the call. */
+  signal: AbortSignal;
+  /** Present when the call carried a `progressToken`: sends one `notifications/progress` with it. */
+  progress?: (done: number, message: string) => Promise<void>;
+}
+
 /**
- * The context of one call of `op`, with the config loaded now. Raises `no-session` where the operation needs a
- * session the config does not hold, naming the file it read, before any request.
+ * The context of one call of `op`, with the config loaded now and the call's signal and progress. Raises `no-session`
+ * where the operation needs a session the config does not hold, naming the file it read, before any request.
  */
-export async function operationContext(deps: ToolDeps, op: Operation): Promise<OperationContext> {
+export async function operationContext(deps: ToolDeps, op: Operation, call: CallExtras): Promise<OperationContext> {
   const loaded = await loadConfig({ env: deps.env });
   if (op.needsSession && loaded.config.session === undefined) {
     throw new NoSessionError(
       loaded.exists ? `no session in ${loaded.path}` : `no session: no config file at ${loaded.path}`,
     );
   }
-  return { client: deps.client(), config: loaded, clock: deps.clock, stderr: deps.stderr, source: "mcp" };
+  return {
+    client: deps.client(),
+    config: loaded,
+    clock: deps.clock,
+    stderr: deps.stderr,
+    source: "mcp",
+    signal: call.signal,
+    ...(call.progress === undefined ? {} : { progress: call.progress }),
+  };
 }

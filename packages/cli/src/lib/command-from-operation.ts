@@ -14,6 +14,7 @@
  * | `z.number()` | parsed with `Number()`; a non-integer or out-of-range value is a `usage` error |
  * | a union of `z.number()` and string literals | the raw argument is a literal if it equals one, else parsed as a number; anything else is `usage` |
  * | a zod default | the Commander default, shown in `--help` |
+ * | a zod `.describe()` text | the help text of the argument or option, in place of the bare key (issue #11: `attendees get` names `user_id` and `me`) |
  *
  * The placeholder of a value flag follows the schema type: a number array `<ids>`, a number `<n>`, a string `<text>`,
  * any other array `<values>`, anything else `<value>`. After Commander parses, the collected object is validated by
@@ -22,11 +23,14 @@
  * `index.ts` maps the `CommanderError` to exit 2).
  *
  * The leaf action builds the `OperationContext` (`source: "cli"`): `loadConfig()`, the program's one `GripClient`,
- * the clock and the stderr of the context; when `op.needsSession` and the config has no session, it raises
- * `no-session` (exit 3, hint `gripeventsctl auth signin <slug>`) before any request. It calls `op.run`, validates the
- * result with the output schema (a failure is the `api` kind naming the field) and renders it through `writeOutput`.
- * A thrown `GripError` is printed by `lib/exit-codes.ts` in `runProgram` and mapped to its code; an unexpected
- * exception prints a redacted message and exits 1; only the umbrella's `cli.ts` sets `process.exitCode`.
+ * the clock, the stderr and the signal of the context, armed on the process's first SIGINT for the duration of the
+ * run (`CliContext.armInterrupt`); `progress` stays undefined, the CLI writing progress to stderr. When
+ * `op.needsSession` and the config has no session, it raises `no-session` (exit 3, hint `gripeventsctl auth signin
+ * <slug>`) before any request. It calls `op.run`, validates the result with the output schema (a failure is the `api`
+ * kind naming the field), renders it through `writeOutput` and records `op.exitCode?.(output) ?? 0` as the program's
+ * outcome, which `runProgram` returns (issue #11 § Additions to the `Operation` type). A thrown `GripError` is printed
+ * by `lib/exit-codes.ts` in `runProgram` and mapped to its code; an unexpected exception prints a redacted message and
+ * exits 1; only the umbrella's `cli.ts` sets `process.exitCode`.
  */
 
 import {
@@ -178,7 +182,15 @@ function noSessionMessage(loaded: LoadResult): string {
   return loaded.exists ? `no session in ${loaded.path}` : `no session: no config file at ${loaded.path}`;
 }
 
-/** The leaf's action once the arguments are typed: the context, the session check, the run, the projection, the output. */
+/** The help text of an argument or an option: the zod `.describe()` text where the field carries one, else the key. */
+function helpTextOf(schema: z.ZodType, key: string): string {
+  return schema.description ?? key;
+}
+
+/**
+ * The leaf's action once the arguments are typed: the context, the session check, the run under the armed signal, the
+ * projection, the output and the operation's exit code.
+ */
 async function runOperation(
   op: Operation,
   context: CliContext,
@@ -194,9 +206,17 @@ async function runOperation(
     clock: context.clock,
     stderr: context.stderr,
     source: "cli",
+    signal: context.signal,
   };
-  const result = await op.run(ctx, input);
+  const disarm = context.armInterrupt();
+  let result: unknown;
+  try {
+    result = await op.run(ctx, input);
+  } finally {
+    disarm();
+  }
   const output = validateOutput(op, result);
+  context.outcome.exitCode = op.exitCode?.(output) ?? 0;
   writeOutput(output, {
     schema: op.output,
     render: op.render,
@@ -235,7 +255,7 @@ export function commandFromOperation(op: Operation, context: CliContext): Comman
     }
     const field = describeField(schema);
     fields.set(key, field);
-    leaf.argument(field.required ? `<${key}>` : `[${key}]`, key);
+    leaf.argument(field.required ? `<${key}>` : `[${key}]`, helpTextOf(schema, key));
   }
   for (const [key, schema] of Object.entries(shape)) {
     if (positional.includes(key)) continue;
@@ -244,10 +264,10 @@ export function commandFromOperation(op: Operation, context: CliContext): Comman
     const flag = flags[key] ?? kebabCase(key);
     attributes.set(key, camelCase(flag));
     if (field.kind === "boolean") {
-      leaf.option(`--${flag}`, key);
+      leaf.option(`--${flag}`, helpTextOf(schema, key));
       continue;
     }
-    const option = new Option(`--${flag} <${placeholderOf(field)}>`, key);
+    const option = new Option(`--${flag} <${placeholderOf(field)}>`, helpTextOf(schema, key));
     if (field.required) option.makeOptionMandatory();
     else if (field.hasDefault) option.default(field.defaultValue);
     leaf.addOption(option);

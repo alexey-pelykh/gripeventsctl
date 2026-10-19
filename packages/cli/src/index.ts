@@ -9,14 +9,20 @@ import { registerSignout } from "./commands/auth/signout.js";
 import { registerStatus } from "./commands/auth/status.js";
 import { commandFromOperation } from "./lib/command-from-operation.js";
 import { type CliContext, type CliOptions, createContext } from "./lib/context.js";
-import { USAGE_EXIT_CODE, printError } from "./lib/exit-codes.js";
+import {
+  INTERRUPTED_EXIT_CODE,
+  INTERRUPTED_KIND,
+  INTERRUPTED_MESSAGE,
+  USAGE_EXIT_CODE,
+  printError,
+} from "./lib/exit-codes.js";
 import { packageVersion } from "./lib/package-version.js";
 
 export const PROGRAM_NAME = "gripeventsctl";
 
 export { commandFromOperation } from "./lib/command-from-operation.js";
 export { type CliOptions } from "./lib/context.js";
-export { EXIT_CODES, type ErrorReport, describeError, exitCodeOf } from "./lib/exit-codes.js";
+export { EXIT_CODES, type ErrorReport, INTERRUPTED_EXIT_CODE, describeError, exitCodeOf } from "./lib/exit-codes.js";
 export {
   type RenderHints,
   type RenderOptions,
@@ -115,10 +121,18 @@ export interface RunResult {
   error?: unknown;
 }
 
+/** True where `error` is what the context's signal aborted with: the run was interrupted, not broken. */
+function isInterruption(error: unknown, signal: AbortSignal): boolean {
+  if (!signal.aborted) return false;
+  const reason: unknown = signal.reason;
+  return error === reason || (error instanceof Error && error.cause === reason);
+}
+
 /**
- * Parse `argv` (the arguments after the program name) and run the command. Success exits 0; help and
- * `--version` exit 0; Commander's own usage errors (unknown command, missing argument, unknown option)
- * exit 2 after Commander printed its message and the command's help on stderr; every other error is
+ * Parse `argv` (the arguments after the program name) and run the command. A completed operation exits with the code
+ * it chose through `op.exitCode`, 0 unless it set one; help and `--version` exit 0; Commander's own usage errors
+ * (unknown command, missing argument, unknown option) exit 2 after Commander printed its message and the command's
+ * help on stderr; a run whose wait the user's SIGINT ended prints `interrupted` and exits 130; every other error is
  * printed by the exit-code module in the human or the `--json` form. Never calls `process.exit`.
  */
 export async function runProgram(argv: readonly string[], options: CliOptions = {}): Promise<RunResult> {
@@ -126,13 +140,20 @@ export async function runProgram(argv: readonly string[], options: CliOptions = 
   const program = programFor(context);
   try {
     await program.parseAsync([...argv], { from: "user" });
-    return { exitCode: 0 };
+    return { exitCode: context.outcome.exitCode };
   } catch (error: unknown) {
     if (error instanceof CommanderError) {
       if (error.exitCode === 0) return { exitCode: 0 };
       return { exitCode: USAGE_EXIT_CODE, error };
     }
     const json = program.opts<{ json?: boolean }>().json === true;
+    if (isInterruption(error, context.signal)) {
+      const line = json
+        ? JSON.stringify({ error: { kind: INTERRUPTED_KIND, message: INTERRUPTED_MESSAGE, hint: "" } })
+        : INTERRUPTED_MESSAGE;
+      context.terminal.write(context.stderr, `${line}\n`);
+      return { exitCode: INTERRUPTED_EXIT_CODE, error };
+    }
     const exitCode = printError(error, { terminal: context.terminal, stderr: context.stderr, json });
     return { exitCode, error };
   }
