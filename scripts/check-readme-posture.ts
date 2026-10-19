@@ -79,7 +79,8 @@ function linesOf(text: string): string[] {
 
 /** The text of a heading line after its `#` run and one space, or `undefined` for a non-heading. */
 function headingText(line: string): string | undefined {
-  const match = /^#{1,6} (.*)$/u.exec(line);
+  // Rule 1 lets a package copy carry the block under `##` or `###`; any other level is not the block.
+  const match = /^#{2,3} (.*)$/u.exec(line);
   return match === null ? undefined : (match[1] ?? "");
 }
 
