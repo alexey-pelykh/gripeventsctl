@@ -10,6 +10,12 @@
  * refreshes the lock's mtime every `stale / 2` ms while the process lives, so a 300-second wait keeps it, and a second
  * writer waits for the lock, then runs its own guard over the updated log. This is the dedicated lock of the writes:
  * the config's lock is for `saveConfig()`, and a write must not block a sign-in.
+ *
+ * A lock is compromised when the holder stalled past the staleness window (a stopped process, a laptop asleep) and
+ * another writer removed it and took its own: the library's refresh timer notices and tells `onCompromised`. The
+ * handle `fn` receives reports it (`compromised()`), so the gate refuses to consume or send once its guard verdict
+ * is older than its lock, instead of running a second write over the other writer's. The release after a compromise
+ * is swallowed: the lock is no longer this process's to release.
  */
 
 import { lock as lockFile } from "proper-lockfile";
@@ -22,11 +28,18 @@ export const WRITE_LOCK_OPTIONS = {
   realpath: false,
   stale: 10_000,
   retries: { retries: 5, minTimeout: 1000, maxTimeout: 1000 },
-  onCompromised: (): void => undefined,
 } as const;
 
+/** What one lock call receives: the options above plus the compromise callback of this one lock. */
+export type WriteLockCallOptions = typeof WRITE_LOCK_OPTIONS & { onCompromised: (error: Error) => void };
+
 /** The lock operation the module uses; `proper-lockfile`'s `lock` satisfies it and a test injects a fake. */
-export type WriteLockFn = (path: string, options: typeof WRITE_LOCK_OPTIONS) => Promise<() => Promise<void>>;
+export type WriteLockFn = (path: string, options: WriteLockCallOptions) => Promise<() => Promise<void>>;
+
+/** The handle `fn` runs with: whether the lock was lost to another writer since it was taken. */
+export interface WriteLockHandle {
+  compromised(): boolean;
+}
 
 /** What `withWriteLock` answers: the value of `fn` under the lock, or that the lock was busy and `fn` never ran. */
 export type WriteLockOutcome<T> = { taken: true; value: T } | { taken: false };
@@ -44,18 +57,25 @@ function isLocked(error: unknown): boolean {
 /**
  * Run `fn` under the write lock at `path`. The lock file is created by the opening rule first (mode `0600`, never
  * through a symbolic link). Busy after the retries: `{ taken: false }` and `fn` never ran. Any other failure to lock
- * is the `config` kind naming the path.
+ * is the `config` kind naming the path. `fn` receives the handle that reports a compromise.
  */
 export async function withWriteLock<T>(
   path: string,
-  fn: () => Promise<T>,
+  fn: (lock: WriteLockHandle) => Promise<T>,
   options: WriteLockOptions = {},
 ): Promise<WriteLockOutcome<T>> {
   const handle = await openAppendOnly(path, options.fs);
   await handle.close();
+  // A holder, not a `let`: the flag is set from the library's callback, which the control flow does not see.
+  const state = { compromised: false };
   let release: () => Promise<void>;
   try {
-    release = await (options.lock ?? lockFile)(path, WRITE_LOCK_OPTIONS);
+    release = await (options.lock ?? lockFile)(path, {
+      ...WRITE_LOCK_OPTIONS,
+      onCompromised: () => {
+        state.compromised = true;
+      },
+    });
   } catch (error: unknown) {
     if (isLocked(error)) return { taken: false };
     const message = error instanceof Error ? error.message : String(error);
@@ -64,8 +84,13 @@ export async function withWriteLock<T>(
     });
   }
   try {
-    return { taken: true, value: await fn() };
+    return { taken: true, value: await fn({ compromised: () => state.compromised }) };
   } finally {
-    await release();
+    if (state.compromised) {
+      // The lock is another writer's now; the library's release would throw, and there is nothing left to release.
+      await release().catch(() => undefined);
+    } else {
+      await release();
+    }
   }
 }

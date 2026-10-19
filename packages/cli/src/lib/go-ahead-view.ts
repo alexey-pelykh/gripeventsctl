@@ -9,8 +9,10 @@
  * `escapeForTerminal` (controls, overrides and zero-width characters escaped, never raw), the text's length in code
  * points and the first eight characters of its SHA-256, then the prompt with a fresh four-character challenge code
  * from `crypto.randomInt` over the alphabet `abcdefghjkmnpqrstuvwxyz23456789`. The typed answer must equal the code;
- * anything else cancels. Every line is written through the terminal seam, never through the CLI's stdout stream, so
- * `--json` output stays one JSON document and the fake terminal's screen buffer holds the view.
+ * anything else cancels. Every line of the view is written through the terminal seam to the stream the caller names
+ * (stderr), never through the CLI's stdout stream, so `--json` output on stdout is never interleaved with the view
+ * and the fake terminal's screen buffer holds it; the prompt itself is the terminal's own and draws where the
+ * terminal draws its prompts.
  */
 
 import { randomInt } from "node:crypto";

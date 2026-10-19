@@ -12,9 +12,12 @@
  * argument and no MCP host setting enables writes for one call; this module reads no environment variable and takes
  * no argument that could. A refusal is a result, never an exception: the CLI maps `outcome: "refused"` to exit 4 through
  * the operation's `exitCode`, and the MCP builder returns it as a normal result the assistant can relay. A dry run
- * runs every check, reads the status, sends nothing, and leaves a line flagged `dry_run: true`. Every attempt leaves
- * exactly one line, whatever the outcome, except `write-busy`, the one refusal whose line cannot be appended because
- * the log cannot be appended without the lock; its result says so in its hint.
+ * runs every check, reads the status, sends nothing, and leaves a line flagged `dry_run: true`. Every attempt that
+ * reaches a verdict leaves exactly one line, whatever the outcome. Two attempts leave none: `write-busy`, whose line
+ * cannot be appended because the log cannot be appended without the lock (its hint says so), and a transport error
+ * from the status read, which propagates before any verdict. A lock lost to another writer after it was taken (the
+ * holder stalled past the staleness window) is `write-busy` too, decided before the consume and before the send, so
+ * a guard verdict older than its lock never sends.
  *
  * The terminal confirmation is the CLI's: `confirm` is present on the CLI path only, runs only where both stdin and
  * stdout are TTYs, and is logged as `go_ahead: "terminal-confirmation"` without touching the journal. Elsewhere a
@@ -39,7 +42,7 @@ import {
   proposeGoAhead,
   readJournal,
 } from "./go-ahead.js";
-import { withWriteLock } from "./lock.js";
+import { type WriteLockFn, type WriteLockHandle, type WriteLockOutcome, withWriteLock } from "./lock.js";
 import { type WriteKind, type WritePlan, type WriteRequest, type WriteVerdicts, redactRequest } from "./plan.js";
 import { type Refusal, type SendLogEntry, appendSendLog, readSendLog, repeatGuard } from "./send-log.js";
 
@@ -126,6 +129,8 @@ export interface WriteGateOptions {
   stderr: NodeJS.WritableStream;
   /** The CLI's terminal confirmation; absent on MCP. */
   confirm?: TerminalConfirmation;
+  /** The lock operation; `proper-lockfile`'s by default. A test injects one that reports a compromise. */
+  lock?: WriteLockFn;
 }
 
 /** The hint of the safe-mode refusal: the config switch that enables writes, and the file it lives in. */
@@ -135,7 +140,7 @@ export function safeModeHint(configPath: string): string {
 
 /** The hint of the write-busy refusal. */
 export function writeBusyHint(lockPath: string): string {
-  return `another write holds ${lockPath}; wait for it to finish and run again`;
+  return `another write holds ${lockPath}; wait for it to finish and run again; no send log line was written`;
 }
 
 /** The hint of the repeat-guard refusal, naming the entry that blocks. */
@@ -208,6 +213,7 @@ function findGoAhead(
 /** The write gate over `options`; nothing is read or written until `execute()` or `refuse()` runs. */
 export function createWriteGate(options: WriteGateOptions): WriteGate {
   const { config, paths, clock, source, stderr, confirm } = options;
+  const lockOptions = options.lock === undefined ? {} : { lock: options.lock };
   const token = config.config.session?.token;
   // The stored token is a secret this process already holds: registered, so no hint or plan can carry it.
   if (token !== undefined && !token.startsWith(OP_REFERENCE_PREFIX)) registerSecret(token);
@@ -293,7 +299,7 @@ export function createWriteGate(options: WriteGateOptions): WriteGate {
   /** Append `entry` under the lock; busy after the retries is the write-busy result instead. */
   const appendRefusal = async (attempt: Attempt, refusal: Refusal, hint: string): Promise<WriteResult> => {
     const entry = refusedLine(attempt, refusal);
-    const outcome = await withWriteLock(paths.writeLock, () => appendSendLog(paths.sendLog, entry));
+    const outcome = await withWriteLock(paths.writeLock, () => appendSendLog(paths.sendLog, entry), lockOptions);
     return outcome.taken ? refused(attempt, refusal, hint, entry) : busy(attempt);
   };
 
@@ -312,171 +318,187 @@ export function createWriteGate(options: WriteGateOptions): WriteGate {
     if (!writesEnabled() && !spec.dryRun) return appendRefusal(attempt, "safe-mode", safeModeHint(config.path));
 
     // 3. The lock, held from the repeat guard to the append.
-    const locked = await withWriteLock(paths.writeLock, async (): Promise<WriteResult> => {
-      // 4. The repeat guard over the send log as it is now.
-      const blocking = repeatGuard(await readSendLog(paths.sendLog, stderr), write);
-      if (blocking !== null) {
-        plan.verdicts.repeat_guard = "blocked";
-        if (!spec.dryRun) {
-          const hint = repeatGuardHint(plan.kind, plan.target_thing_id, blocking.time, attempt.message !== null);
-          const entry = refusedLine(attempt, "repeat-guard");
-          await appendSendLog(paths.sendLog, entry);
-          return refused(attempt, "repeat-guard", hint, entry);
-        }
-      }
-
-      // 5. The status read: the one platform call inside the lock before the POST. A transport error propagates
-      // after the lock is released, with nothing appended: the attempt never reached a verdict.
-      if (spec.readStatus !== undefined) {
-        const status = await spec.readStatus();
-        plan.status_before = status;
-        if (status !== spec.allowedStatus) {
-          plan.verdicts.status = "not-none";
+    const locked: WriteLockOutcome<WriteResult> = await withWriteLock(
+      paths.writeLock,
+      async (lock: WriteLockHandle): Promise<WriteResult> => {
+        // 4. The repeat guard over the send log as it is now.
+        const blocking = repeatGuard(await readSendLog(paths.sendLog, stderr), write);
+        if (blocking !== null) {
+          plan.verdicts.repeat_guard = "blocked";
           if (!spec.dryRun) {
-            const hint = statusNotNoneHint(status, spec.allowedStatus ?? "", spec.statusHint);
-            const entry = refusedLine(attempt, "status-not-none");
+            const hint = repeatGuardHint(plan.kind, plan.target_thing_id, blocking.time, attempt.message !== null);
+            const entry = refusedLine(attempt, "repeat-guard");
             await appendSendLog(paths.sendLog, entry);
-            return refused(attempt, "status-not-none", hint, entry);
+            return refused(attempt, "repeat-guard", hint, entry);
           }
         }
-      }
 
-      // 6. The go-ahead check for a write that carries a text.
-      let journalGoAhead: GoAheadRecord | undefined;
-      let expiredGoAhead: GoAheadRecord | undefined;
-      let goAheadId: string | null = null;
-      if (attempt.message !== null) {
-        const now = clock.now();
-        const found = findGoAhead(foldJournal(await readJournal(paths.goAheads, stderr)), write, now);
-        expiredGoAhead = found.expired;
-        if (found.usable !== undefined) {
-          plan.verdicts.go_ahead = "recorded";
-          journalGoAhead = found.usable;
-          goAheadId = found.usable.id;
-        } else if (found.expired !== undefined && !spec.dryRun) {
-          plan.verdicts.go_ahead = "expired";
-          const proposal = await proposeGoAhead(paths.goAheads, { ...write, message: attempt.message, source }, clock);
-          const hint = goAheadExpiredHint(found.expired.id, goAheadExpiresAt(found.expired).toISOString());
-          const entry = refusedLine(attempt, "go-ahead-expired");
-          await appendSendLog(paths.sendLog, entry);
-          return refused(attempt, "go-ahead-expired", hint, entry, {
-            go_ahead_id: proposal.id,
-            go_ahead_expires_at: goAheadExpiresAt(proposal).toISOString(),
-          });
-        } else if (found.expired !== undefined) {
-          plan.verdicts.go_ahead = "expired";
-        } else if (spec.dryRun) {
-          plan.verdicts.go_ahead = "missing";
-        } else if (confirm?.interactive) {
-          let confirmed: boolean;
-          try {
-            confirmed = await confirm.run({
-              kind: plan.kind,
-              slug: config.config.session?.slug ?? "",
-              container_id: plan.container_id,
-              target_thing_id: plan.target_thing_id,
-              message: attempt.message,
-              message_sha256: write.message_sha256,
-            });
-          } catch {
-            confirmed = false;
+        // 5. The status read: the one platform call inside the lock before the POST. A transport error propagates
+        // after the lock is released, with nothing appended: the attempt never reached a verdict.
+        if (spec.readStatus !== undefined) {
+          const status = await spec.readStatus();
+          plan.status_before = status;
+          if (status !== spec.allowedStatus) {
+            plan.verdicts.status = "not-none";
+            if (!spec.dryRun) {
+              const hint = statusNotNoneHint(status, spec.allowedStatus ?? "", spec.statusHint);
+              const entry = refusedLine(attempt, "status-not-none");
+              await appendSendLog(paths.sendLog, entry);
+              return refused(attempt, "status-not-none", hint, entry);
+            }
           }
-          if (!confirmed) {
+        }
+
+        // 6. The go-ahead check for a write that carries a text.
+        let journalGoAhead: GoAheadRecord | undefined;
+        let expiredGoAhead: GoAheadRecord | undefined;
+        let goAheadId: string | null = null;
+        if (attempt.message !== null) {
+          const now = clock.now();
+          const found = findGoAhead(foldJournal(await readJournal(paths.goAheads, stderr)), write, now);
+          expiredGoAhead = found.expired;
+          if (found.usable !== undefined) {
+            plan.verdicts.go_ahead = "recorded";
+            journalGoAhead = found.usable;
+            goAheadId = found.usable.id;
+          } else if (found.expired !== undefined && !spec.dryRun) {
+            plan.verdicts.go_ahead = "expired";
+            const proposal = await proposeGoAhead(
+              paths.goAheads,
+              { ...write, message: attempt.message, source },
+              clock,
+            );
+            const hint = goAheadExpiredHint(found.expired.id, goAheadExpiresAt(found.expired).toISOString());
+            const entry = refusedLine(attempt, "go-ahead-expired");
+            await appendSendLog(paths.sendLog, entry);
+            return refused(attempt, "go-ahead-expired", hint, entry, {
+              go_ahead_id: proposal.id,
+              go_ahead_expires_at: goAheadExpiresAt(proposal).toISOString(),
+            });
+          } else if (found.expired !== undefined) {
+            plan.verdicts.go_ahead = "expired";
+          } else if (spec.dryRun) {
+            plan.verdicts.go_ahead = "missing";
+          } else if (confirm?.interactive) {
+            let confirmed: boolean;
+            try {
+              confirmed = await confirm.run({
+                kind: plan.kind,
+                slug: config.config.session?.slug ?? "",
+                container_id: plan.container_id,
+                target_thing_id: plan.target_thing_id,
+                message: attempt.message,
+                message_sha256: write.message_sha256,
+              });
+            } catch {
+              confirmed = false;
+            }
+            if (!confirmed) {
+              const entry = refusedLine(attempt, "go-ahead-missing");
+              await appendSendLog(paths.sendLog, entry);
+              return refused(attempt, "go-ahead-missing", NOT_CONFIRMED_HINT, entry);
+            }
+            plan.verdicts.go_ahead = "recorded";
+            goAheadId = TERMINAL_CONFIRMATION;
+          } else {
+            const proposal = await proposeGoAhead(
+              paths.goAheads,
+              { ...write, message: attempt.message, source },
+              clock,
+            );
             const entry = refusedLine(attempt, "go-ahead-missing");
             await appendSendLog(paths.sendLog, entry);
-            return refused(attempt, "go-ahead-missing", NOT_CONFIRMED_HINT, entry);
+            return refused(attempt, "go-ahead-missing", goAheadMissingHint(proposal.id), entry, {
+              go_ahead_id: proposal.id,
+              go_ahead_expires_at: goAheadExpiresAt(proposal).toISOString(),
+            });
           }
-          plan.verdicts.go_ahead = "recorded";
-          goAheadId = TERMINAL_CONFIRMATION;
-        } else {
-          const proposal = await proposeGoAhead(paths.goAheads, { ...write, message: attempt.message, source }, clock);
-          const entry = refusedLine(attempt, "go-ahead-missing");
-          await appendSendLog(paths.sendLog, entry);
-          return refused(attempt, "go-ahead-missing", goAheadMissingHint(proposal.id), entry, {
-            go_ahead_id: proposal.id,
-            go_ahead_expires_at: goAheadExpiresAt(proposal).toISOString(),
-          });
         }
-      }
 
-      // 7. The plan is complete. A dry run leaves its line and sends nothing.
-      if (spec.dryRun) {
-        const failing = firstFailingVerdict(plan.verdicts);
+        // 7. The plan is complete. A dry run leaves its line and sends nothing.
+        if (spec.dryRun) {
+          const failing = firstFailingVerdict(plan.verdicts);
+          const entry = lineOf(attempt, {
+            outcome: failing === undefined ? "dry-run" : "refused",
+            refusal: failing ?? null,
+            go_ahead: goAheadId,
+            http_status: null,
+            response: null,
+          });
+          await appendSendLog(paths.sendLog, entry);
+          if (failing === undefined) return { plan, outcome: "dry-run", log_entry: entry };
+          const hint =
+            failing === "safe-mode"
+              ? safeModeHint(config.path)
+              : failing === "repeat-guard"
+                ? repeatGuardHint(plan.kind, plan.target_thing_id, blocking?.time ?? "", attempt.message !== null)
+                : failing === "status-not-none"
+                  ? statusNotNoneHint(plan.status_before ?? "", spec.allowedStatus ?? "", spec.statusHint)
+                  : failing === "go-ahead-expired"
+                    ? goAheadExpiredHint(
+                        expiredGoAhead?.id ?? "",
+                        expiredGoAhead === undefined ? "" : goAheadExpiresAt(expiredGoAhead).toISOString(),
+                      )
+                    : GO_AHEAD_MISSING_DRY_RUN_HINT;
+          return refused(attempt, failing, hint, entry);
+        }
+
+        // The lock must still be this process's: a verdict read before the lock was lost to another writer is stale.
+        if (lock.compromised()) return busy(attempt);
+
+        // 8. The consume, on disk before the POST leaves: a crash between the two leaves the go-ahead used.
+        if (journalGoAhead !== undefined) await consumeGoAhead(paths.goAheads, journalGoAhead, source, clock);
+        if (lock.compromised()) return busy(attempt);
+
+        // 9. The send; the transport's 429 backoff runs inside this await, under the lock.
+        const mark = answerMark();
+        let answer: R;
+        try {
+          answer = await spec.send();
+        } catch (error: unknown) {
+          // 10. The append of a failed attempt, then the error re-raised for the surface's exit code or error result.
+          await appendSendLog(
+            paths.sendLog,
+            lineOf(attempt, {
+              outcome: "failed",
+              refusal: null,
+              go_ahead: goAheadId,
+              http_status: statusOf(error),
+              response: responseOf(error),
+            }),
+          );
+          if (journalGoAhead !== undefined && error instanceof Error)
+            error.message = `${error.message}; ${GO_AHEAD_USED}`;
+          throw error;
+        }
+        const last = lastAnswer();
+        const http_status =
+          last !== undefined && last.sequence > mark && last.method === "POST" && last.path === spec.request.path
+            ? last.status
+            : null;
+        const fields = spec.resultFields(answer);
+        // 10. The append of a sent attempt.
         const entry = lineOf(attempt, {
-          outcome: failing === undefined ? "dry-run" : "refused",
-          refusal: failing ?? null,
+          outcome: "sent",
+          refusal: null,
           go_ahead: goAheadId,
-          http_status: null,
+          http_status,
           response: null,
+          ...(fields.connection === undefined ? {} : { connection: fields.connection }),
+          ...(fields.message_id === undefined ? {} : { message_id: fields.message_id }),
         });
         await appendSendLog(paths.sendLog, entry);
-        if (failing === undefined) return { plan, outcome: "dry-run", log_entry: entry };
-        const hint =
-          failing === "safe-mode"
-            ? safeModeHint(config.path)
-            : failing === "repeat-guard"
-              ? repeatGuardHint(plan.kind, plan.target_thing_id, blocking?.time ?? "", attempt.message !== null)
-              : failing === "status-not-none"
-                ? statusNotNoneHint(plan.status_before ?? "", spec.allowedStatus ?? "", spec.statusHint)
-                : failing === "go-ahead-expired"
-                  ? goAheadExpiredHint(
-                      expiredGoAhead?.id ?? "",
-                      expiredGoAhead === undefined ? "" : goAheadExpiresAt(expiredGoAhead).toISOString(),
-                    )
-                  : GO_AHEAD_MISSING_DRY_RUN_HINT;
-        return refused(attempt, failing, hint, entry);
-      }
-
-      // 8. The consume, on disk before the POST leaves: a crash between the two leaves the go-ahead used.
-      if (journalGoAhead !== undefined) await consumeGoAhead(paths.goAheads, journalGoAhead, source, clock);
-
-      // 9. The send; the transport's 429 backoff runs inside this await, under the lock.
-      const mark = answerMark();
-      let answer: R;
-      try {
-        answer = await spec.send();
-      } catch (error: unknown) {
-        // 10. The append of a failed attempt, then the error re-raised for the surface's exit code or error result.
-        await appendSendLog(
-          paths.sendLog,
-          lineOf(attempt, {
-            outcome: "failed",
-            refusal: null,
-            go_ahead: goAheadId,
-            http_status: statusOf(error),
-            response: responseOf(error),
-          }),
-        );
-        if (journalGoAhead !== undefined && error instanceof Error)
-          error.message = `${error.message}; ${GO_AHEAD_USED}`;
-        throw error;
-      }
-      const last = lastAnswer();
-      const http_status =
-        last !== undefined && last.sequence > mark && last.method === "POST" && last.path === spec.request.path
-          ? last.status
-          : null;
-      const fields = spec.resultFields(answer);
-      // 10. The append of a sent attempt.
-      const entry = lineOf(attempt, {
-        outcome: "sent",
-        refusal: null,
-        go_ahead: goAheadId,
-        http_status,
-        response: null,
-        ...(fields.connection === undefined ? {} : { connection: fields.connection }),
-        ...(fields.message_id === undefined ? {} : { message_id: fields.message_id }),
-      });
-      await appendSendLog(paths.sendLog, entry);
-      return {
-        plan,
-        outcome: "sent",
-        ...(goAheadId === null ? {} : { go_ahead_id: goAheadId }),
-        ...(fields.connection === undefined ? {} : { connection: fields.connection }),
-        ...(fields.message_id === undefined ? {} : { message_id: fields.message_id }),
-        log_entry: entry,
-      };
-    });
+        return {
+          plan,
+          outcome: "sent",
+          ...(goAheadId === null ? {} : { go_ahead_id: goAheadId }),
+          ...(fields.connection === undefined ? {} : { connection: fields.connection }),
+          ...(fields.message_id === undefined ? {} : { message_id: fields.message_id }),
+          log_entry: entry,
+        };
+      },
+      lockOptions,
+    );
     return locked.taken ? locked.value : busy(attempt);
   }
 
