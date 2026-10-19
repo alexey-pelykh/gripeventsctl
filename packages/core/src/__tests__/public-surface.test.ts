@@ -111,6 +111,8 @@ const VALUE_EXPORTS = [
   "resolveSessionToken",
   "saveConfig",
   "saveSession",
+  // lib/escape.ts (issue #12): the terminal escaping, from the output module of cli, for a diagnostic line
+  "escapeForTerminal",
   // operations/registry.ts and operations/operation.ts (issue #9): the registry and its identity helper; the operation
   // items fill the list.
   "OPERATIONS",

@@ -24,7 +24,8 @@
  *   before writing, and `redactOutput()` does the same for every string value of the MCP `structuredContent`, the
  *   last line of defence behind the projections. `redactString` runs last: render, then redact, then write, so a
  *   table cell cannot re-join a split secret.
- * - Terminal escaping (`escapeForTerminal`): in every human rendering and in the MCP text block, the C0 and C1
+ * - Terminal escaping (`escapeForTerminal`, from `lib/escape.ts` of core, so an operation's diagnostic line can
+ *   use it too): in every human rendering and in the MCP text block, the C0 and C1
  *   control characters other than `\n` and `\t` (U+0000 to U+0008, U+000B to U+001F, U+007F, U+0080 to U+009F)
  *   render as `\x..` (two lowercase hex digits), and the bidirectional overrides, embeddings and isolates (U+202A to
  *   U+202E, U+2066 to U+2069) and the zero-width characters (U+200B to U+200D, U+FEFF) render as `\u{....}`
@@ -33,7 +34,7 @@
  *   them itself. Each value is escaped before the table is laid out, so the columns are measured on what is shown.
  */
 
-import { type Operation, ApiError, redactString } from "@gripeventsctl/core";
+import { type Operation, ApiError, escapeForTerminal, redactString } from "@gripeventsctl/core";
 import Table from "cli-table3";
 import type { z } from "zod";
 
@@ -74,43 +75,11 @@ export interface WriteOutputOptions extends RenderOptions {
 
 export const DEFAULT_EMPTY_TEXT = "no results";
 
+/** The escaping function, from core since the match item (`lib/escape.ts` there), under the name this module gave it. */
+export { escapeForTerminal };
+
 /** The separator of the plain table form. */
 const PLAIN_SEPARATOR = " | ";
-
-/** A C0 or C1 control character other than `\n` and `\t`. */
-function isControlCodePoint(codePoint: number): boolean {
-  return (
-    codePoint <= 0x08 ||
-    (codePoint >= 0x0b && codePoint <= 0x1f) ||
-    codePoint === 0x7f ||
-    (codePoint >= 0x80 && codePoint <= 0x9f)
-  );
-}
-
-/** A bidirectional override, embedding or isolate, or a zero-width character. */
-function isInvisibleCodePoint(codePoint: number): boolean {
-  return (
-    (codePoint >= 0x202a && codePoint <= 0x202e) ||
-    (codePoint >= 0x2066 && codePoint <= 0x2069) ||
-    (codePoint >= 0x200b && codePoint <= 0x200d) ||
-    codePoint === 0xfeff
-  );
-}
-
-/**
- * `text` with every control, bidirectional and zero-width code point of the table above in its visible form, by
- * code point, so an astral character is never split. Pure: the same input gives the same output.
- */
-export function escapeForTerminal(text: string): string {
-  let escaped = "";
-  for (const character of text) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    if (isControlCodePoint(codePoint)) escaped += `\\x${codePoint.toString(16).padStart(2, "0")}`;
-    else if (isInvisibleCodePoint(codePoint)) escaped += `\\u{${codePoint.toString(16)}}`;
-    else escaped += character;
-  }
-  return escaped;
-}
 
 function pad(value: number, width = 2): string {
   return String(value).padStart(width, "0");
