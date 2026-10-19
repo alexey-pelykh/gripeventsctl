@@ -45,7 +45,7 @@ capabilities:
   - id: CAP-ATTENDEES
     description: List, dump and get send the documented shapes, report gated sets, stop correctly, and never cache
     levels: [S]
-    status: planned
+    status: active
   - id: CAP-PACING
     description: One request in flight per process, 1.5 s between pages, at least 1 s between profile reads, pages in order
     levels: [C, S]
