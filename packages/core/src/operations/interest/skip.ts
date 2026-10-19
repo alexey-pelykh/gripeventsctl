@@ -6,8 +6,8 @@
  * write runs through `ctx.gate.execute()` and nothing else, with the status read of `match status` (issue #12;
  * `docs/api/interest.md` § Check the state first) and `has_match_none` as the one allowed status, and
  * `POST container/<container_id>/thing/user_id/match_manual/no/to_thing/<thing_id>` with the body `{}`: the skip
- * carries no text, as the app sends from the screens that have no message box (§ The message), and no message input
- * exists on either surface. The spec's `message` is `null`, so the gate asks for no go-ahead. The `no` answer is
+ * carries no text (issue #17 § `interest skip`; § The message records `{}` as what the app sends from the chat and
+ * meeting screens), and no message input exists on either surface. The spec's `message` is `null`, so the gate asks for no go-ahead. The `no` answer is
  * from the app code and not verified live as a POST (§ Send an answer; `docs/api/not-verified.md` § Match answers):
  * the first live send, on the maintainer's go-ahead, dates the row; until then the module stays as the page records
  * the shape, and the maintainer may hold it out of the registry.

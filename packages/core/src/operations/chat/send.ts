@@ -8,8 +8,9 @@
  * thread), directly under `/1/`. The write runs through the gate and nothing else: the message policy first
  * (`interest/message-policy.ts`, through `ctx.gate.refuse()`; the chat page records no cap, and the same policy is
  * applied so the gate's rules are one set), then `ctx.gate.execute()` with no status read: the chat endpoint is the
- * thread, and a thread exists only between two people who both showed interest (§ Chat threads), so the platform's
- * own refusal of a missing thread is logged as `failed` with the transport's kind. The 200 answer's `message_id` is
+ * thread, and § Chat threads records a thread for a person who showed interest back (issue #17 reads that as a thread
+ * existing only between connected people), so the platform's own refusal of a missing thread is logged as `failed`
+ * with the transport's kind. The 200 answer's `message_id` is
  * reported. The repeat guard's key is `(container_id, target_thing_id, "chat.send")`: the tool sends at most one
  * message per person in v1, and the refusal says the conversation continues in the app. An empty text is a usage
  * error on both surfaces (the schema's `min(1)`), before anything.
