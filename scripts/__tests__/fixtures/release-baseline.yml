@@ -1,0 +1,356 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per-ref grouping so distinct tag publishes do not serialize against each
+  # other (a v0.1.0 publish must not block a separate v0.1.1 publish if they
+  # somehow race). Within a single ref the publish still serializes — and
+  # cancel-in-progress stays false because npm publishes are permanent.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # NOTE: validate tests at version 0.0.0, while publish-npm stamps and ships the
+  # tagged version. Accepted trade-off: for TypeScript projects, version rarely
+  # affects build output. If version-dependent behavior is introduced, consider
+  # moving version stamping before validation.
+  validate:
+    name: Validate (${{ matrix.os }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: pnpm format:check
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm license-check
+      - run: pnpm test
+      - run: pnpm check-oracles
+
+  # Supply-chain audit gate. Runs BEFORE publish-npm to block release
+  # if any direct or transitive dependency has a known high/critical CVE.
+  # Single-OS (ubuntu-latest) because the audit is lockfile-deterministic —
+  # the 3-OS validate matrix sanity-checks build portability, not deps.
+  #
+  # NOTE: `pnpm audit signatures` is NOT a real pnpm subcommand (it exists
+  # in npm 9+ only). pnpm silently ignores the `signatures` arg and runs the
+  # standard vulnerability audit. Registry signature verification therefore
+  # is not provided here; the supply-chain defenses we DO have are:
+  #   - `--frozen-lockfile --ignore-scripts` at install (in setup action)
+  #   - `pnpm-lock.yaml` integrity hashes per package
+  #   - `--audit-level=high` failing the build on known CVEs (this step)
+  #   - Workspace dep-confusion guard at lint time (scripts/check-dep-confusion.ts)
+  audit:
+    name: Audit dependencies
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - name: pnpm audit (fail on high/critical)
+        run: pnpm audit --audit-level=high
+
+  # NOTE: The npm-publish environment requires the following protection rules
+  # configured in GitHub Settings → Environments → npm-publish:
+  #   1. Deployment branches — restricted to "main" branch and "v*" tags
+  # npm publishes are permanent (same version cannot be re-published after unpublish),
+  # so branch/tag restriction prevents accidental or unauthorized releases.
+  publish-npm:
+    name: Publish to npm
+    timeout-minutes: 10
+    needs: [validate, audit]
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: write # gh release upload (SBOM + tarball assets)
+      id-token: write # OIDC trusted publishing + Sigstore attestations
+      attestations: write # actions/attest-build-provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing requires npm >=11.5.1 for OIDC token exchange
+      - name: Upgrade npm
+        run: npm install -g "npm@>=11.5.1"
+
+      - name: Stamp version
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION="${RAW_TAG#v}"
+          # Build metadata (+build) intentionally excluded — only release and pre-release tags accepted
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$'; then
+            echo "::error::Tag '$RAW_TAG' is not a valid semver version"
+            exit 1
+          fi
+          pnpm -r exec npm version "$VERSION" --no-git-tag-version --allow-same-version
+          # MCP registry manifest: stamp both top-level .version (server) and .packages[0].version (npm package)
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.json.tmp
+          mv server.json.tmp server.json
+          # Derive the npm dist-tag from the semver prerelease component.
+          # A '-' in $VERSION unambiguously signals a prerelease (build
+          # metadata '+...' is already excluded by the regex above), so
+          # prerelease tags land on `next` and never displace `latest`.
+          # `--tag latest` equals npm's default, so always passing the
+          # derived tag is safe and explicit.
+          case "$VERSION" in
+            *-*) DIST_TAG=next ;;
+            *)   DIST_TAG=latest ;;
+          esac
+          # Export VERSION + DIST_TAG for downstream verification + provenance steps.
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "DIST_TAG=$DIST_TAG" >> "$GITHUB_ENV"
+
+      - name: Verify stamped versions
+        env:
+          EXPECTED: ${{ env.VERSION }}
+        run: |
+          # Defense-in-depth: confirm every stamping target landed on the tag-derived
+          # version BEFORE the publish step takes any irreversible action on npm.
+          # Catches silent failures in `pnpm -r exec npm version`, jq, or sed.
+          FAIL=0
+          for pkg_json in \
+            packages/core/package.json \
+            packages/cli/package.json \
+            packages/mcp/package.json \
+            packages/gripeventsctl/package.json; do
+            v=$(jq -r '.version' "$pkg_json")
+            if [ "$v" != "$EXPECTED" ]; then
+              echo "::error file=$pkg_json::version=$v, expected $EXPECTED"
+              FAIL=1
+            fi
+          done
+          v=$(jq -r '.version' server.json)
+          v_pkg=$(jq -r '.packages[0].version' server.json)
+          if [ "$v" != "$EXPECTED" ]; then
+            echo "::error file=server.json::.version=$v, expected $EXPECTED"
+            FAIL=1
+          fi
+          if [ "$v_pkg" != "$EXPECTED" ]; then
+            echo "::error file=server.json::.packages[0].version=$v_pkg, expected $EXPECTED"
+            FAIL=1
+          fi
+          if [ $FAIL -ne 0 ]; then exit 1; fi
+
+      - name: Verify dist-tag matches GitHub release prerelease flag
+        env:
+          DIST_TAG: ${{ env.DIST_TAG }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          # Defense-in-depth: the version-derived prerelease state (DIST_TAG)
+          # must agree with the GitHub release's prerelease flag BEFORE any
+          # package is published. Catches a human cutting a -rc tag without
+          # marking the release as a pre-release (or vice versa) — either
+          # mismatch would land a prerelease on `latest` or hold a GA release
+          # off it.
+          FAIL=0
+          if [ "$DIST_TAG" = "next" ] && [ "$IS_PRERELEASE" != "true" ]; then
+            echo "::error::DIST_TAG=next (version has a prerelease component) but the GitHub release is NOT marked pre-release. Mark the release as a pre-release or cut a non-prerelease tag."
+            FAIL=1
+          fi
+          if [ "$DIST_TAG" = "latest" ] && [ "$IS_PRERELEASE" = "true" ]; then
+            echo "::error::DIST_TAG=latest (version has no prerelease component) but the GitHub release IS marked pre-release. Use a -rc/-beta tag or unmark the pre-release flag."
+            FAIL=1
+          fi
+          if [ $FAIL -ne 0 ]; then exit 1; fi
+
+      - run: pnpm build
+
+      - name: Verify packages
+        run: pnpm -r publish --dry-run --access public --no-git-checks
+
+      # Pack workspace tarballs ahead of publish so we have a stable, on-disk
+      # subject for `actions/attest-build-provenance`. Looped per published
+      # package so every tarball lands in one directory. The private `@gripeventsctl/e2e` package is intentionally
+      # excluded from the list. Each tarball is byte-identical to what
+      # `pnpm -r publish` ships (same source tree, same `files` field), so
+      # the SHA256 digest attested here matches the digest downstream
+      # verifiers compute against the npm-served tarball.
+      - name: Pack workspace tarballs
+        run: |
+          mkdir -p dist/pack
+          for pkg_dir in packages/core packages/cli packages/mcp packages/gripeventsctl; do
+            (cd "$pkg_dir" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/dist/pack")
+          done
+          ls -la dist/pack/
+
+      # Generate CycloneDX SBOMs per published package (`@gripeventsctl/core`,
+      # `@gripeventsctl/cli`, `@gripeventsctl/mcp`, `gripeventsctl`) plus an aggregate workspace SBOM.
+      # `@cyclonedx/cdxgen` is Apache-2.0 and pnpm-native (reads pnpm-lock.yaml
+      # to resolve catalog: references to concrete versions). Installed
+      # globally once to avoid 5× npx hydration. `--no-install-deps` reuses
+      # the workspace's already-resolved node_modules (populated by the setup
+      # action's `pnpm install --frozen-lockfile`) instead of triggering a
+      # redundant per-package install. Pinned to the latest stable major at
+      # PR time; bump together with action SHAs during dep refresh.
+      - name: Install cdxgen
+        run: npm install -g "@cyclonedx/cdxgen@12.3.3"
+
+      - name: Generate CycloneDX SBOMs
+        env:
+          EXPECTED: ${{ env.VERSION }}
+          # cdxgen telemetry is opt-out — disable for CI privacy.
+          DISABLE_TELEMETRY: "true"
+        run: |
+          mkdir -p dist/sbom
+          # Per-published-package SBOMs.
+          for pkg_dir in packages/core packages/cli packages/mcp packages/gripeventsctl; do
+            pkg_name=$(jq -r '.name' "$pkg_dir/package.json")
+            # @gripeventsctl/core → gripeventsctl-core; gripeventsctl → gripeventsctl
+            safe_name=$(echo "$pkg_name" | sed 's|^@||;s|/|-|g')
+            out="dist/sbom/${safe_name}-${EXPECTED}.cdx.json"
+            cdxgen \
+              --type pnpm \
+              --no-install-deps \
+              --spec-version 1.6 \
+              --output "$out" \
+              --project-name "$pkg_name" \
+              --project-version "$EXPECTED" \
+              "$pkg_dir"
+            echo "::notice file=$out::Generated SBOM for $pkg_name@$EXPECTED"
+          done
+          # Aggregate workspace SBOM covers all workspace packages plus their
+          # joint transitive closure — useful for full-repo dependency audits.
+          cdxgen \
+            --type pnpm \
+            --no-install-deps \
+            --spec-version 1.6 \
+            --output "dist/sbom/gripeventsctl-workspace-${EXPECTED}.cdx.json" \
+            --project-name "gripeventsctl-workspace" \
+            --project-version "$EXPECTED" \
+            .
+          ls -la dist/sbom/
+
+      # Per-package idempotent publish loop. The previous bare
+      # `pnpm -r publish` provided no per-package gating: if publish failed
+      # mid-loop (network blip, registry hiccup, signing-service outage), the
+      # already-published packages could not be re-published (npmjs.com version
+      # strings are write-once), so re-running the workflow against the same
+      # tag would hard-fail on packages 1..N-1 with 403 and leave packages N..4
+      # in an unknown state. The operator's only recovery paths were (a) burn
+      # the version string and cut a new tag, or (b) hand-publish remaining
+      # packages from a maintainer laptop (violates the "publish stays in CI
+      # only" trust boundary).
+      #
+      # The skip-if-published guard makes the workflow safely retriable: a
+      # second run against the same tag will skip the already-published
+      # packages and pick up from the failure point.
+      #
+      # This loop enumerates the published-package set by package name —
+      # identical (same names, same order) to the provenance-verification
+      # step below. The set also appears three more times in this job by
+      # directory path (verify-stamped-versions, pack tarballs, generate
+      # SBOMs). Adding a new published package requires updating all five
+      # sites.
+      #
+      # The `npm view` skip guard exits 0 only when the version is already
+      # on the registry. Any other failure mode (transient network, registry
+      # outage) returns non-zero, so the script falls through to
+      # `pnpm publish`, which itself returns a clear 403 if the version is in
+      # fact already published — preserving the same retry-safe state.
+      #
+      # `--report-summary` from the previous command is dropped: nothing in
+      # this workflow consumes `pnpm-publish-summary.json`, and per-package
+      # calls would each overwrite it anyway.
+      - name: Publish packages (idempotent)
+        env:
+          EXPECTED: ${{ env.VERSION }}
+          DIST_TAG: ${{ env.DIST_TAG }}
+        run: |
+          for pkg in gripeventsctl @gripeventsctl/core @gripeventsctl/cli @gripeventsctl/mcp; do
+            if npm view "$pkg@$EXPECTED" version >/dev/null 2>&1; then
+              echo "::notice::$pkg@$EXPECTED already published, skipping"
+              continue
+            fi
+            echo "::notice::publishing $pkg@$EXPECTED to dist-tag $DIST_TAG"
+            pnpm --filter "$pkg" publish --access public --no-git-checks --provenance --tag "$DIST_TAG"
+          done
+
+      - name: Verify provenance attestations
+        env:
+          EXPECTED: ${{ env.VERSION }}
+          # npm registry CDN has a documented 1-30s eventual-consistency window
+          # between successful publish and when `npm view` returns metadata.
+          # Retry with backoff so a transient indexing lag does not produce a
+          # false-negative gate failure. Budget ~48s to clear the
+          # upper end of that window with margin (attestation indexing lags
+          # longer than plain version metadata).
+          VERIFY_RETRIES: "8"
+          VERIFY_INTERVAL_SECS: "6"
+        run: |
+          # Catch silent OIDC misconfiguration where publish succeeds but
+          # Sigstore provenance is absent. Every published package must carry
+          # a provenance predicate or this gate fails the run.
+          FAIL=0
+          for pkg in gripeventsctl @gripeventsctl/core @gripeventsctl/cli @gripeventsctl/mcp; do
+            ATTEST=""
+            for attempt in $(seq 1 "$VERIFY_RETRIES"); do
+              # `npm view <pkg>@<version> --json` returns a bare object on some
+              # npm versions and a single-element array on others; normalise to
+              # the object before indexing so jq does not abort (`Cannot index
+              # array with string "dist"`) and sink the whole verify step.
+              ATTEST=$(npm view "${pkg}@${EXPECTED}" --json 2>/dev/null \
+                | jq -r '(if type == "array" then .[0] else . end)
+                         | .dist.attestations.provenance.predicateType // empty')
+              if [ -n "$ATTEST" ]; then
+                echo "${pkg}@${EXPECTED}: provenance=$ATTEST (attempt $attempt/$VERIFY_RETRIES)"
+                break
+              fi
+              if [ "$attempt" -lt "$VERIFY_RETRIES" ]; then
+                echo "::notice::${pkg}@${EXPECTED}: not indexed yet (attempt $attempt/$VERIFY_RETRIES), retrying in ${VERIFY_INTERVAL_SECS}s"
+                sleep "$VERIFY_INTERVAL_SECS"
+              fi
+            done
+            if [ -z "$ATTEST" ]; then
+              # Distinguish registry-indexing timeout from genuine
+              # missing-provenance so failures can be triaged. The most likely
+              # cause after $VERIFY_RETRIES retries is indexing lag, but a
+              # `--provenance`-flagless publish path or a Sigstore signing
+              # failure would also reach here.
+              echo "::error::${pkg}@${EXPECTED}: provenance still missing after $VERIFY_RETRIES retries (~$((VERIFY_RETRIES * VERIFY_INTERVAL_SECS))s) — registry indexing timeout OR genuine missing-provenance"
+              FAIL=1
+            fi
+          done
+          if [ $FAIL -ne 0 ]; then exit 1; fi
+
+      # GitHub-side SLSA Provenance attestation, complementary to the
+      # npm-registry-side provenance produced by `pnpm publish --provenance`.
+      # Anchors each packed tarball to this GitHub Actions build in the
+      # Sigstore public transparency log. Downstream verifiers can run
+      # `gh attestation verify <tarball> --owner alexey-pelykh` against any
+      # of these tarballs (or against the npm-served tarball with the same
+      # SHA256 digest) to prove the artifact came from this exact build.
+      - name: Attest build provenance (GitHub-side)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/pack/*.tgz"
+
+      # SBOMs and packed tarballs uploaded to the GitHub Release as durable
+      # assets — supply-chain consumers can audit the dependency graph from
+      # the SBOM, and the tarballs let downstream verifiers run
+      # `gh attestation verify` offline against this release's exact bytes.
+      # --clobber permits idempotent re-runs (e.g., a release workflow
+      # re-triggered after a transient failure of a later step).
+      - name: Upload SBOMs and tarballs to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAW_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$RAW_TAG" \
+            dist/sbom/*.cdx.json \
+            dist/pack/*.tgz \
+            --clobber
