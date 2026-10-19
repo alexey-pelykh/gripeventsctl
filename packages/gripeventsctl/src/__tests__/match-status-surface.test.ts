@@ -374,7 +374,7 @@ describe("[CAP-MATCH-READ] match status at the surface: the CLI leaf and the MCP
     });
   });
 
-  it("AC-12: a status equal to the session token shows <REDACTED> in the key-value line, --json, the text block, structuredContent and the warning line, and the raw token appears nowhere; a documented value is rendered as is", async () => {
+  it("AC-13: a status equal to the session token shows <REDACTED> in the key-value line, --json, the text block, structuredContent and the warning line, and the raw token appears nowhere; a documented value is rendered as is", async () => {
     await withSession(async (home, token) => {
       armStatus(() => success200({ status: token }), 3);
       const human = await runCli(["match", "status", "42"], io(home));
@@ -400,7 +400,7 @@ describe("[CAP-MATCH-READ] match status at the surface: the CLI leaf and the MCP
     });
   });
 
-  it("AC-11: a run on either surface writes no file: the temporary home holds the config and nothing else afterwards", async () => {
+  it("AC-12: a run on either surface writes no file: the temporary home holds the config and nothing else afterwards", async () => {
     await withSession(async (home) => {
       armStatus(() => matchStatus200("has_match_none"), 2);
       await runCli(["match", "status", "42"], io(home));
