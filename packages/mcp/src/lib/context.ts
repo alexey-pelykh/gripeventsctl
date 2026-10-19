@@ -21,6 +21,8 @@ import {
   NoSessionError,
   type Operation,
   type OperationContext,
+  createWriteGate,
+  derivedPaths,
   loadConfig,
   systemClock,
 } from "@gripeventsctl/core";
@@ -107,5 +109,13 @@ export async function operationContext(deps: ToolDeps, op: Operation, call: Call
     source: "mcp",
     signal: call.signal,
     ...(call.progress === undefined ? {} : { progress: call.progress }),
+    // The write gate without a terminal confirmation (issue #16): a missing go-ahead is proposed, never asked for here.
+    gate: createWriteGate({
+      config: loaded,
+      paths: derivedPaths(loaded.path, loaded.config),
+      clock: deps.clock,
+      source: "mcp",
+      stderr: deps.stderr,
+    }),
   };
 }

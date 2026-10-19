@@ -19,7 +19,7 @@
 
 import { GripError, type GripErrorKind, redactString } from "@gripeventsctl/core";
 
-import type { OutputStream, Terminal } from "./terminal.js";
+import type { OutputStream } from "./terminal.js";
 
 /** `kind` to exit code. `Record` over the kind union: a kind added to core without a row fails to compile. */
 export const EXIT_CODES: Readonly<Record<GripErrorKind, number>> = Object.freeze({
@@ -79,9 +79,8 @@ export function oneLine(text: string): string {
   });
 }
 
-/** What the printer needs: where stderr is, the terminal that writes to it, and whether `--json` was given. */
+/** What the printer needs: where stderr is and whether `--json` was given. */
 export interface ErrorPrinterIo {
-  terminal: Terminal;
   stderr: OutputStream;
   json: boolean;
 }
@@ -107,10 +106,10 @@ export function printError(error: unknown, io: ErrorPrinterIo): number {
   const report = describeError(error);
   if (io.json) {
     // `JSON.stringify` escapes every line break itself; the fields are redacted already.
-    io.terminal.write(io.stderr, `${JSON.stringify({ error: report })}\n`);
+    io.stderr.write(`${JSON.stringify({ error: report })}\n`);
   } else {
     const hint = report.hint === "" ? "" : `; hint: ${report.hint}`;
-    io.terminal.write(io.stderr, `${oneLine(`${report.message}${hint}`)}\n`);
+    io.stderr.write(`${oneLine(`${report.message}${hint}`)}\n`);
   }
   return exitCodeOf(error);
 }

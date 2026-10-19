@@ -6,8 +6,9 @@
  * drives the commands with a fake that never touches the process's stdin. The real one wraps
  * `@clack/prompts` (`text` for a visible prompt, `password` for a hidden one) and the `isTTY` flags
  * of the process streams. `@gripeventsctl/testing` ships the fake (`fakeTerminal()`), with settable
- * TTY flags, scripted answers and a screen buffer. A later item reuses the seam for the go-ahead
- * confirmation.
+ * TTY flags, scripted answers and a screen buffer. `write` carries what is shown beside a prompt, the
+ * go-ahead view of issue #16 for one; a result, an error and Commander's own output go to the stream
+ * itself, so a fake whose `write` only keeps a screen still leaves `--json` one document on stdout.
  */
 
 import { isCancel, password, text } from "@clack/prompts";
@@ -25,7 +26,7 @@ export interface Terminal {
   prompt(label: string): Promise<string>;
   /** A hidden prompt: the answer is never echoed. */
   promptHidden(label: string): Promise<string>;
-  /** Write `text` to `stream`: how every line of output reaches the user. */
+  /** Write `text` to `stream`: how a screen shown beside a prompt reaches the user. */
   write(stream: OutputStream, text: string): void;
 }
 

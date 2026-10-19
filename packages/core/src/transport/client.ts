@@ -229,6 +229,38 @@ interface Classified {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The last accepted answer: the write gate reads the HTTP status of the POST it sent from it. The queue serialises
+// requests process-wide, so the answer recorded after `send()` resolves is the write's own; the gate compares the
+// method and the path all the same.
+// ---------------------------------------------------------------------------------------------
+
+/** One accepted answer: the request it answered and its status, numbered in the order answers arrived. */
+export interface AnswerRecord {
+  sequence: number;
+  method: "GET" | "POST";
+  path: string;
+  status: number;
+}
+
+let answerCount = 0;
+let lastAccepted: AnswerRecord | undefined;
+
+function recordAnswer(method: "GET" | "POST", path: string, status: number): void {
+  answerCount += 1;
+  lastAccepted = { sequence: answerCount, method, path, status };
+}
+
+/** The number of answers accepted so far in this process: a mark to compare a later `lastAnswer()` against. */
+export function answerMark(): number {
+  return answerCount;
+}
+
+/** The last answer the client accepted (a `success: true` envelope), or `undefined` before the first. */
+export function lastAnswer(): AnswerRecord | undefined {
+  return lastAccepted;
+}
+
+// ---------------------------------------------------------------------------------------------
 // The process-wide queue: one request in flight per process, across every client instance.
 // ---------------------------------------------------------------------------------------------
 
@@ -685,13 +717,18 @@ export class GripClient {
     });
   }
 
-  /** The queue slot's work: the token resolved and the headers built inside the slot, then the exchange. */
+  /**
+   * The queue slot's work: the token resolved and the headers built inside the slot, then the exchange, whose
+   * accepted answer is recorded as the process's last answer (`lastAnswer()`).
+   */
   async #resolveAndExchange(spec: RequestSpec): Promise<Classified> {
     const headers =
       spec.context === "authenticated"
         ? authenticatedHeaders(await this.#sessionToken(), { body: spec.body !== undefined })
         : (spec.headers ?? {});
-    return this.#exchange(spec, headers);
+    const classified = await this.#exchange(spec, headers);
+    recordAnswer(spec.method, spec.path, classified.status);
+    return classified;
   }
 
   /**

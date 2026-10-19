@@ -22,5 +22,7 @@ cli_only:
     reason: "Local credential-lifecycle teardown; CLI-only."
   - command: "auth status"
     reason: "Local credential-lifecycle inspection; CLI-only."
+  - command: "writes go-ahead"
+    reason: "The go-ahead is the user's own act at a terminal; an assistant must not record it. Approval needs a TTY on stdin and stdout and a typed challenge code."
 
 mcp_only: []

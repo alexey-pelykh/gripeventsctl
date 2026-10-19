@@ -14,6 +14,10 @@ import {
   type LoadResult,
   OPERATIONS,
   type Operation,
+  type TerminalConfirmation,
+  type WriteGate,
+  createWriteGate,
+  derivedPaths,
   redactString,
   systemClock,
   workTreeWarnings,
@@ -21,6 +25,7 @@ import {
 import type { Dispatcher } from "undici";
 
 import { INTERRUPTED_MESSAGE } from "./exit-codes.js";
+import { askChallenge, showGoAheadView } from "./go-ahead-view.js";
 import { type Terminal, realTerminal } from "./terminal.js";
 
 export interface CliOptions {
@@ -113,19 +118,23 @@ export function createContext(options: CliOptions = {}): CliContext {
   };
 }
 
-/** One line of human output on stdout, through `redactString`: a backstop, no line is built from a secret. */
+/**
+ * One line of human output on stdout, through `redactString`: a backstop, no line is built from a secret. Output
+ * goes to the stream itself: the terminal seam carries the prompts and the screens shown beside a prompt (the
+ * go-ahead view, issue #16), never a result, so `--json` stays one document on stdout whatever the terminal shows.
+ */
 export function writeOut(context: CliContext, line: string): void {
-  context.terminal.write(context.stdout, `${redactString(line)}\n`);
+  context.stdout.write(`${redactString(line)}\n`);
 }
 
 /** One line of diagnostics on stderr, through `redactString` (CLAUDE.md: every log path passes through it). */
 export function writeErr(context: CliContext, line: string): void {
-  context.terminal.write(context.stderr, `${redactString(line)}\n`);
+  context.stderr.write(`${redactString(line)}\n`);
 }
 
 /** One JSON document on stdout: the `--json` form of a result. */
 export function writeJson(context: CliContext, value: unknown): void {
-  context.terminal.write(context.stdout, `${JSON.stringify(value)}\n`);
+  context.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 /**
@@ -136,4 +145,38 @@ export function printWorkTreeWarnings(context: CliContext, loaded: LoadResult): 
   const paths = workTreeWarnings(loaded.config, loaded.path);
   if (paths.length === 0) return;
   writeErr(context, `warning: inside a git work tree, do not commit: ${paths.join(", ")}`);
+}
+
+/**
+ * The CLI's terminal confirmation (issue #16 § The terminal confirmation): interactive only where the terminal
+ * reports a TTY on stdin and on stdout, which `execute()` checks before calling `run`; the view and the prompt go
+ * through the terminal to stderr, never to the CLI's stdout stream, so `--json` stays one document. No `--yes` flag,
+ * environment variable or piped answer stands in for it: with a non-TTY stdin the gate takes the proposal path.
+ */
+export function terminalConfirmation(context: CliContext): TerminalConfirmation {
+  return {
+    interactive: context.terminal.isStdinTTY() && context.terminal.isStdoutTTY(),
+    run: (view) => {
+      showGoAheadView(context.terminal, context.stderr, {
+        kind: view.kind,
+        event: { slug: view.slug, containerId: view.container_id },
+        target: { thingId: view.target_thing_id },
+        message: view.message,
+        messageSha256: view.message_sha256,
+      });
+      return askChallenge(context.terminal, "send");
+    },
+  };
+}
+
+/** The write gate of one command run (issue #16): the loaded config, its derived paths, the CLI's confirmation. */
+export function writeGateFor(context: CliContext, loaded: LoadResult): WriteGate {
+  return createWriteGate({
+    config: loaded,
+    paths: derivedPaths(loaded.path, loaded.config),
+    clock: context.clock,
+    source: "cli",
+    stderr: context.stderr,
+    confirm: terminalConfirmation(context),
+  });
 }

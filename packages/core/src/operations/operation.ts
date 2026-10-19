@@ -23,7 +23,8 @@
  * whose output names an outcome that is not success, `attendees dump` stopped by a transport error for one (absent
  * means 0; the MCP builder ignores it, a completed run being a normal result); `mcp.descriptionSuffix` is what the
  * MCP tool description carries after the posture and boundary sentences, where an operation's item fixes a notice
- * for the assistant that the CLI help line does not carry. An operation never inspects an HTTP status: the transport
+ * for the assistant that the CLI help line does not carry; `mcp.descriptionPosture` replaces the posture sentence of
+ * the kind, for an operation that reads local state only (issue #16). An operation never inspects an HTTP status: the transport
  * classifies every answer and raises the typed error; an operation catches a typed error only to turn it into an
  * outcome its output schema names.
  */
@@ -31,6 +32,7 @@
 import type { z } from "zod";
 
 import type { Config } from "../config/schema.js";
+import type { WriteGate } from "../gate/gate.js";
 import type { Clock } from "../lib/clock.js";
 import type { GripClient } from "../transport/client.js";
 
@@ -55,7 +57,12 @@ export interface OperationContext {
    * progress so far (pages, for a dump) and `message` as its text. Absent on the CLI, which writes progress to stderr.
    */
   progress?: (done: number, message: string) => Promise<void>;
-  // The write gate item adds `gate` here.
+  /**
+   * The write gate (issue #16), built once per call by each surface's `lib/context.ts`: the one path a write runs
+   * through. A read operation ignores it; a write passes its spec to `gate.execute()` and never calls the repeat
+   * guard, the journal or the lock itself.
+   */
+  gate: WriteGate;
 }
 
 /** One documented request shape an operation sends, with its `docs/api/` page and section anchor. */
@@ -87,6 +94,11 @@ export interface Operation<I extends z.ZodObject = z.ZodObject, O extends z.ZodT
   mcp?: {
     /** Sentences the MCP tool description carries after the posture and boundary sentences; never in the CLI help. */
     descriptionSuffix?: string;
+    /**
+     * The one posture sentence of the MCP tool description, in place of the one the operation's kind fixes (issue
+     * #16: the two `writes` reads read the tool's own local state and make no platform call).
+     */
+    descriptionPosture?: string;
   };
   render?: {
     epochFields?: readonly string[];
