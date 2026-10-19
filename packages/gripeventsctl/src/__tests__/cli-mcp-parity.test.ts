@@ -153,8 +153,11 @@ export function checkParity({ leaves, tools, exemptions }: ParityInput): string[
   return findings;
 }
 
-/** The three CLI-only leaves of the `auth` group: the standing `cli_only` set of `.mcp-exempt.yaml`. */
+/** The three CLI-only leaves of the `auth` group, part of the standing `cli_only` set of `.mcp-exempt.yaml`. */
 const AUTH_LEAVES = ["auth signin", "auth signout", "auth status"];
+
+/** The standing `cli_only` set: the `auth` group and the hand-written `writes go-ahead` (issue #16). */
+const CLI_ONLY_LEAVES = [...AUTH_LEAVES, "writes go-ahead"];
 
 /** The CLI leaf `<group> <verb>` of an operation. */
 function leafOf(op: Pick<Operation, "group" | "verb">): string {
@@ -208,11 +211,11 @@ describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the
     await withTempHome(async (home) => {
       const operations = gateOperations();
       const leaves = leavesOf(buildProgram({ operations }));
-      expect(sorted(leaves)).toEqual(sorted([...AUTH_LEAVES, ...OPERATIONS.map(leafOf), "synthetic echo"]));
+      expect(sorted(leaves)).toEqual(sorted([...CLI_ONLY_LEAVES, ...OPERATIONS.map(leafOf), "synthetic echo"]));
       const tools = await withServer(home.env, operations, async (l) => (await l.listTools()).map((tool) => tool.name));
       expect(sorted(tools)).toEqual(sorted([...OPERATIONS.map(toolOf), "gripeventsctl_synthetic_echo"]));
       const exemptions = await readExemptions();
-      expect(exemptions.cli_only.map((entry) => entry.command)).toEqual(AUTH_LEAVES);
+      expect(exemptions.cli_only.map((entry) => entry.command)).toEqual(CLI_ONLY_LEAVES);
       expect(exemptions.mcp_only).toEqual([]);
       expect(checkParity({ leaves, tools, exemptions })).toEqual([]);
     });
@@ -234,7 +237,7 @@ describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the
   });
 
   it("AC-14: the gate fails naming the entry for a stale exemption, an exemption without a reason, an auth tool, and the held attendance surface", async () => {
-    const leaves = ["auth signin", "auth signout", "auth status", "synthetic echo"];
+    const leaves = [...CLI_ONLY_LEAVES, "synthetic echo"];
     const tools = ["gripeventsctl_synthetic_echo"];
     const exemptions = await readExemptions();
 
@@ -288,8 +291,10 @@ describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the
           );
           for (const banned of BANNED_INPUT_KEYS) expect(properties, tool.name).not.toContain(banned);
           const description = tool.description ?? "";
+          // The two `writes` reads replace the posture sentence with their own (issue #16); every other read keeps it.
+          const posture = operations.find((op) => toolOf(op) === tool.name)?.mcp?.descriptionPosture ?? READ_POSTURE;
           if (tool.annotations?.readOnlyHint === true) {
-            expect(description, tool.name).toContain(READ_POSTURE);
+            expect(description, tool.name).toContain(posture);
             expect(description, tool.name).toContain(READ_BOUNDARY);
             expect(tool.annotations, tool.name).toEqual({ readOnlyHint: true });
           } else {

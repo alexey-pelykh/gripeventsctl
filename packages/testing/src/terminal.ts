@@ -28,6 +28,11 @@ export interface FakeTerminalOptions {
   stdoutTTY?: boolean;
   /** The answers of the visible prompts, in order; an unscripted prompt rejects. */
   answers?: string[];
+  /**
+   * An answer computed from the prompt's label and its ordinal (1 for the first), tried before the scripted list: how
+   * a test types back the challenge code a go-ahead prompt shows (issue #16). `undefined` falls through to the list.
+   */
+  answer?: (label: string, attempt: number) => string | undefined;
   /** The answers of the hidden prompts, in order; an unscripted prompt rejects. */
   hiddenAnswers?: string[];
 }
@@ -56,7 +61,7 @@ export function fakeTerminal(options: FakeTerminalOptions = {}): FakeTerminal {
     isStdoutTTY: () => stdoutTTY,
     prompt: (label) => {
       visiblePrompts.push(label);
-      const answer = answers.shift();
+      const answer = options.answer?.(label, visiblePrompts.length) ?? answers.shift();
       return answer === undefined
         ? Promise.reject(new Error(`unscripted visible prompt: ${label}`))
         : Promise.resolve(answer);

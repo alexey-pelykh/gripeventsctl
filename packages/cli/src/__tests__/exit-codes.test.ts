@@ -59,9 +59,8 @@ describe("[CAP-AUTH] the exit-code table and the error printer", () => {
         `the ${kind} failure\nwith a second line and ${chatToken}`,
         `do this next for ${kind}`,
       );
-      const human = fakeTerminal();
       const stderr = new Capture();
-      expect(printError(error, { terminal: human.terminal, stderr, json: false })).toBe(code);
+      expect(printError(error, { stderr, json: false })).toBe(code);
       expect(stderr.text.endsWith("\n")).toBe(true);
       expect(stderr.text.slice(0, -1)).not.toContain("\n");
       expect(stderr.text).toContain(`the ${kind} failure`);
@@ -70,7 +69,7 @@ describe("[CAP-AUTH] the exit-code table and the error printer", () => {
       expect(stderr.text).toContain("<REDACTED>");
 
       const json = new Capture();
-      expect(printError(error, { terminal: fakeTerminal().terminal, stderr: json, json: true })).toBe(code);
+      expect(printError(error, { stderr: json, json: true })).toBe(code);
       const parsed = JSON.parse(json.text) as { error: { kind: string; message: string; hint: string } };
       expect(Object.keys(parsed)).toEqual(["error"]);
       expect(Object.keys(parsed.error)).toEqual(["kind", "message", "hint"]);
@@ -85,11 +84,7 @@ describe("[CAP-AUTH] the exit-code table and the error printer", () => {
     const { password } = fixtureSecrets();
     registerSecret(password);
     const stderr = new Capture();
-    const code = printError(new TypeError(`broke with ${password}`), {
-      terminal: fakeTerminal().terminal,
-      stderr,
-      json: true,
-    });
+    const code = printError(new TypeError(`broke with ${password}`), { stderr, json: true });
     expect(code).toBe(1);
     expect(JSON.parse(stderr.text)).toEqual({
       error: { kind: UNEXPECTED_KIND, message: "broke with <REDACTED>", hint: "" },

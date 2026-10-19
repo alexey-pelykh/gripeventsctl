@@ -15,7 +15,15 @@ export {
   saveHomeEnv,
   withTempHome,
 } from "./temp-home.js";
-export { MOCK_API_ORIGIN, type MockGripHooks, type StderrSink, gripPool, mockGrip, stderrSink } from "./mock-grip.js";
+export {
+  MOCK_API_ORIGIN,
+  type MockGripHooks,
+  type StderrSink,
+  gripPool,
+  mockGrip,
+  requestThrough,
+  stderrSink,
+} from "./mock-grip.js";
 export {
   type FakeTerminal,
   type FakeTerminalOptions,
@@ -34,4 +42,17 @@ export {
   umbrellaBinary,
 } from "./stdio-harness.js";
 export { GO_MESSAGE, READY_MESSAGE, type Worker, barrier, forkWorker, killAtIntercept } from "./child.js";
+export {
+  FIXTURE_SENT_AT,
+  type JournalEvent,
+  type SendLogLine,
+  appendJsonLine,
+  eventFields,
+  goAheadId,
+  journalEvent,
+  readJournal,
+  readSendLog,
+  sendLogLine,
+  sha256Of,
+} from "./gate-fixtures.js";
 export * from "./envelopes/index.js";
