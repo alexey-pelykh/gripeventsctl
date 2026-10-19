@@ -11,6 +11,8 @@
 import { attendeesDump } from "./attendees/dump.js";
 import { attendeesGet } from "./attendees/get.js";
 import { attendeesList } from "./attendees/list.js";
+import { chatList } from "./chat/list.js";
+import { chatThread } from "./chat/thread.js";
 import { eventsCheck } from "./events/check.js";
 import { eventsList } from "./events/list.js";
 import { matchStatus } from "./match/status.js";
@@ -24,4 +26,6 @@ export const OPERATIONS: readonly Operation[] = Object.freeze([
   attendeesDump,
   attendeesGet,
   matchStatus,
+  chatList,
+  chatThread,
 ]);
