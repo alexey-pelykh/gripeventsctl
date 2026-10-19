@@ -9,7 +9,7 @@
  * is `data.schedule` projected to the ten documented fields in the order sent, with the agenda session's nulls kept,
  * a display type, type and status the page does not list passed through as sent, every unknown key dropped, a missing
  * `type` or a `data` without `schedule` as the `api` kind naming the field, a missing `attendees` as `[]` and a missing
- * nullable field as `null`; the operation is the ninth registry entry, after the chat entries; the `requests` field
+ * nullable field as `null`; the operation is the tenth registry entry, after the chat entries; the `requests` field
  * names `chat-and-meetings.md` § Schedule, which exists on the page; and a run leaves no file.
  */
 
@@ -155,11 +155,14 @@ describe("[CAP-SCHEDULE] schedule info: one GET of schedule/thing/user_id/info w
     }
   });
 
-  it("is the ninth registry entry, after the two chat entries and before writes status: a read with a session, no input, one GET to chat-and-meetings.md § Schedule, and the section heading exists on the page", async () => {
-    expect(OPERATIONS[8]).toBe(scheduleInfo);
+  it("is the tenth registry entry, after the three chat entries and before the interest entries and writes status: a read with a session, no input, one GET to chat-and-meetings.md § Schedule, and the section heading exists on the page", async () => {
+    expect(OPERATIONS[9]).toBe(scheduleInfo);
     expect(OPERATIONS[7]).toBe(chatThread);
-    expect(OPERATIONS[9]).toBe(writesStatus);
-    expect(OPERATIONS.slice(9).map((op) => op.group)).not.toContain("chat");
+    expect(OPERATIONS[8]?.group).toBe("chat");
+    expect(OPERATIONS[10]?.group).toBe("interest");
+    expect(OPERATIONS[11]?.group).toBe("interest");
+    expect(OPERATIONS[12]).toBe(writesStatus);
+    expect(OPERATIONS.slice(10).map((op) => op.group)).not.toContain("chat");
     expect(scheduleInfo.group).toBe("schedule");
     expect(scheduleInfo.verb).toBe("info");
     expect(scheduleInfo.kind).toBe("read");
