@@ -30,7 +30,7 @@ The friction in the code is on purpose: writes are off by default, repeats are b
 
 ## Status
 
-This repository holds the workspace scaffold and, in `@gripeventsctl/core`, the transport client the commands will use (`GripClient`: the fixed base URL and header set, the config lookup, the login call, the response envelope and error kinds, the HTTP 429 backoff, paging, one request in flight per process). Of the commands below under "Planned surface", the three `auth` commands, the two `events` commands, the three `attendees` commands, `match status`, the three `chat` commands, `schedule info` and the two `interest` commands exist; `attendance get` does not; the three `writes` commands (`writes status`, `writes pending`, `writes go-ahead`), which that list does not name, exist too. The `no` answer `interest skip` sends is from the app code and is not yet verified live (`docs/api/interest.md` § Send an answer).
+This repository holds the workspace scaffold and, in `@gripeventsctl/core`, the transport client the commands will use (`GripClient`: the fixed base URL and header set, the config lookup, the login call, the response envelope and error kinds, the HTTP 429 backoff, paging, one request in flight per process). Of the commands below under "Commands", the three `auth` commands, the two `events` commands, the three `attendees` commands, `match status`, the three `chat` commands, `schedule info` and the two `interest` commands exist; `attendance get` does not; the three `writes` commands (`writes status`, `writes pending`, `writes go-ahead`), which that list does not name, exist too. The `no` answer `interest skip` sends is from the app code and is not yet verified live (`docs/api/interest.md` § Send an answer).
 
 - Nothing is published to npm yet. The npm badges show "not found" until the first release.
 - The binary answers `--version`, `--help`, the three `auth` commands (`auth signin <slug>`, `auth signout`, `auth status`), the two `events` commands (`events check <slug>`, `events list`) and the three `attendees` commands (`attendees list --type <ids> [--page <n>]`, `attendees dump --type <ids> --out <path>`, `attendees get <thing id | user_id | me>`), `match status <thing id>`, the three `chat` commands (`chat list`, `chat thread <thing id>`, `chat send <thing id> <text> [--dry-run]`), `schedule info`, the two `interest` commands (`interest show <thing id> [--message <text>] [--dry-run]`, `interest skip <thing id> [--dry-run]`) and the three `writes` commands (`writes status`, `writes pending`, `writes go-ahead`). It has no other commands.
@@ -136,30 +136,39 @@ These rules apply to all three:
 
 The tool honours the platform's own rate limits.
 
-## Planned surface
+## Commands
 
-Read tools:
+Read commands:
 
-| Command                 | What it will do                            |
-| ----------------------- | ------------------------------------------ |
-| `events check <slug>`   | Check whether an event slug runs on Grip   |
-| `events list`           | List events you can reach                  |
-| `attendees list --type` | List attendees of one type                 |
-| `attendees dump`        | Export the attendee directory when you ask |
-| `attendees get`         | Show one attendee profile                  |
-| `attendance get`        | Show one attendance record                 |
-| `match status`          | Show the match state with an attendee      |
-| `chat list`             | List your chat threads                     |
-| `chat thread`           | Show the messages in one thread            |
-| `schedule info`         | Show the event schedule                    |
+| Command                                     | What it does                                                         |
+| ------------------------------------------- | -------------------------------------------------------------------- |
+| `events check <slug>`                       | Check whether an event slug runs on Grip and show its type set       |
+| `events list`                               | List the active events your session can reach                        |
+| `attendees list --type <ids> [--page <n>]`  | List one page of the attendee directory for the given type ids       |
+| `attendees dump --type <ids> --out <path>`  | Export the attendee directory to the JSON Lines file you name        |
+| `attendees get <thing id \| user_id \| me>` | Show one attendee's profile; `user_id` or `me` shows your own record |
+| `match status <thing id>`                   | Show whether you have answered a person, and whether you connected   |
+| `chat list`                                 | List your chat threads, which are also your connections              |
+| `chat thread <thing id>`                    | Show the messages in your thread with one person                     |
+| `schedule info`                             | Show your schedule: meetings and agenda sessions                     |
+
+One read is held, `attendance get`: no documented call returns one attendance record by thing id.
 
 Gated writes:
 
-| Command                   | What it will do                         |
-| ------------------------- | --------------------------------------- |
-| `interest show --message` | Show interest, with an optional message |
-| `interest skip`           | Skip an attendee                        |
-| `chat send`               | Send a chat message                     |
+| Command                                                   | What it does                                                                |
+| --------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `interest show <thing id> [--message <text>] [--dry-run]` | Show interest in a person, with an optional message of up to 250 characters |
+| `interest skip <thing id> [--dry-run]`                    | Skip a person                                                               |
+| `chat send <thing id> <text> [--dry-run]`                 | Send a chat message to a person you are connected with                      |
+
+Write gate:
+
+| Command                | What it does                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `writes status`        | Show whether writes are enabled, where the send log is, and how many go-aheads await approval |
+| `writes pending`       | List the proposed go-aheads that await approval in a terminal                                 |
+| `writes go-ahead <id>` | Record your go-ahead for one proposed message, at a terminal of your own (CLI only)           |
 
 Auth commands: `auth signin`, `auth signout`, `auth status`.
 
@@ -174,7 +183,7 @@ pnpm test              # unit tests
 pnpm test:coverage     # unit tests with coverage
 pnpm test:e2e          # e2e tests against a live event app session
 pnpm typecheck         # type check all packages
-pnpm lint              # Prettier check, ESLint, secret-leakage and dependency-confusion checks
+pnpm lint              # Prettier check, ESLint and the repository gates
 pnpm format            # fix Prettier formatting
 pnpm license-check     # check dependency licenses
 pnpm dev               # watch mode
