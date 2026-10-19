@@ -128,6 +128,18 @@ const PROJECTED = {
   rtm_score: 0.5,
 };
 
+/**
+ * Poll `check` on real time until it holds, for at most five seconds: the first request of a run is sent only after
+ * the config file was read, which is file-system I/O that a fixed number of event-loop turns does not bound.
+ */
+async function waitFor(check: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 async function settle(): Promise<void> {
   for (let i = 0; i < 20; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -286,8 +298,7 @@ describe("[CAP-ATTENDEES] [CAP-PACING] attendees get: the per-person profile, pr
       const ctx = await contextOf(home, clock);
       const first = attendeesGet.run(ctx, { thing_id: 1 });
       const second = attendeesGet.run(ctx, { thing_id: 1 });
-      await settle();
-      expect(sentAt).toHaveLength(1);
+      await waitFor(() => sentAt.length === 1, "the first profile read");
       await clock.advance(999);
       await settle();
       expect(sentAt).toHaveLength(1);
