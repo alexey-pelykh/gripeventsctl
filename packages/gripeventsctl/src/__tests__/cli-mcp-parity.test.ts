@@ -13,8 +13,9 @@
  * synthetic operation, so every entry a later item adds to the registry is examined here automatically, beside the
  * one operation that exists before any item lands; the expected leaves and tools are derived from the registry and
  * the synthetic entries, never written out. The temporary-home checks (steps 8 and 9) and the injected exemptions
- * (step 11) stay over the synthetic operation alone. The assertion that the set equals the named v1 tool list lands
- * with the last operation item.
+ * (step 11) stay over the synthetic operation alone. The last case asserts that the registry's tool set equals the
+ * named v1 set: the reads except the held `attendance get`, the three gated writes, `writes status` and `writes
+ * pending` (issue #17 § Registration, the last operation item).
  *
  * `OPERATIONS` is read from core's built entry by its place in the repository, as `runCli` of `@gripeventsctl/testing`
  * loads the CLI's: this package declares no dependency on core, and the built entry is the module the two builders
@@ -152,6 +153,27 @@ export function checkParity({ leaves, tools, exemptions }: ParityInput): string[
   }
   return findings;
 }
+
+/**
+ * The named v1 tool set (issue #17 § Registration): the reads except the held `attendance get`, the three gated
+ * writes, and the two `writes` reads, in registry order. Written out here, never derived from the registry.
+ */
+const V1_TOOLS = [
+  "gripeventsctl_events_check",
+  "gripeventsctl_events_list",
+  "gripeventsctl_attendees_list",
+  "gripeventsctl_attendees_dump",
+  "gripeventsctl_attendees_get",
+  "gripeventsctl_match_status",
+  "gripeventsctl_chat_list",
+  "gripeventsctl_chat_thread",
+  "gripeventsctl_chat_send",
+  "gripeventsctl_schedule_info",
+  "gripeventsctl_interest_show",
+  "gripeventsctl_interest_skip",
+  "gripeventsctl_writes_status",
+  "gripeventsctl_writes_pending",
+];
 
 /** The three CLI-only leaves of the `auth` group, part of the standing `cli_only` set of `.mcp-exempt.yaml`. */
 const AUTH_LEAVES = ["auth signin", "auth signout", "auth status"];
@@ -362,6 +384,29 @@ describe("[CAP-PARITY] every CLI leaf has its MCP twin and the reverse, with the
       );
       expect(result.isError).toBeFalsy();
       expect((await readdir(home.dir)).sort()).toEqual(before);
+    });
+  });
+
+  it("#17: the registry's tool set equals the named v1 set, in registry order: the reads except attendance get, the three gated writes, writes status and writes pending; the three writes carry no exemption", async () => {
+    await withTempHome(async (home) => {
+      const tools = await withServer(home.env, OPERATIONS, async (l) => (await l.listTools()).map((tool) => tool.name));
+      expect(tools).toEqual(V1_TOOLS);
+      expect(OPERATIONS.map(toolOf)).toEqual(V1_TOOLS);
+      expect(sorted(leavesOf(buildProgram({ operations: OPERATIONS })))).toEqual(
+        sorted([...CLI_ONLY_LEAVES, ...V1_TOOLS.map(commandOfTool)]),
+      );
+      const exemptions = await readExemptions();
+      for (const write of ["interest show", "interest skip", "chat send"]) {
+        expect(exemptions.cli_only.map((entry) => entry.command)).not.toContain(write);
+        expect(exemptions.mcp_only.map((entry) => entry.tool)).not.toContain(
+          toolOf({ group: write.split(" ")[0] ?? "", verb: write.split(" ")[1] ?? "" }),
+        );
+      }
+      expect(OPERATIONS.filter((op) => op.kind === "write").map(leafOf)).toEqual([
+        "chat send",
+        "interest show",
+        "interest skip",
+      ]);
     });
   });
 
