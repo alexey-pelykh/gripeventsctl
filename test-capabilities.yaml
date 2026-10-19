@@ -89,7 +89,7 @@ capabilities:
   - id: CAP-RELEASE
     description: The release path publishes with provenance through least-privilege, pinned, checksum-verified steps; the ignore rules cover every local file; the matrix and floor hold
     levels: [R, M]
-    status: planned
+    status: active
   - id: CAP-DOCS
     description: Every in-scope docs/api page carries a dated live label, and every operation's page anchor exists
     levels: [R, M]
