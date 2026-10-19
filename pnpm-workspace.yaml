@@ -21,7 +21,7 @@ catalog:
   "@modelcontextprotocol/sdk": "^1.32.1"
   zod: "^4.6.6"
   commander: "^15.0.0"
-  turbo: "^2.11.7"
+  turbo: "^2.11.9"
   "@clack/prompts": "^1.8.1"
   "cli-table3": "^0.6.5"
   yaml: "^2.9.1"
