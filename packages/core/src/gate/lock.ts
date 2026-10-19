@@ -13,7 +13,7 @@
  *
  * A lock is compromised when the holder stalled past the staleness window (a stopped process, a laptop asleep) and
  * another writer removed it and took its own: the library's refresh timer notices and tells `onCompromised`. The
- * handle `fn` receives reports it (`compromised()`), so the gate refuses to consume or send once its guard verdict
+ * handle `fn` receives reports it (`compromised()`), so the gate refuses before the consume once its guard verdict
  * is older than its lock, instead of running a second write over the other writer's. The release after a compromise
  * is swallowed: the lock is no longer this process's to release.
  */

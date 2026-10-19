@@ -16,8 +16,10 @@
  * reaches a verdict leaves exactly one line, whatever the outcome. Two attempts leave none: `write-busy`, whose line
  * cannot be appended because the log cannot be appended without the lock (its hint says so), and a transport error
  * from the status read, which propagates before any verdict. A lock lost to another writer after it was taken (the
- * holder stalled past the staleness window) is `write-busy` too, decided before the consume and before the send, so
- * a guard verdict older than its lock never sends.
+ * holder stalled past the staleness window during the guard or the status read) is `write-busy` too, decided right
+ * before the consume, so a guard verdict older than its lock never spends a go-ahead and never sends. The check is
+ * not repeated after the consume: a go-ahead spent with no line and a hint to run again would be a worse state than
+ * the send that follows the consume at once.
  *
  * The terminal confirmation is the CLI's: `confirm` is present on the CLI path only, runs only where both stdin and
  * stdout are TTYs, and is logged as `go_ahead: "terminal-confirmation"` without touching the journal. Elsewhere a
@@ -448,7 +450,6 @@ export function createWriteGate(options: WriteGateOptions): WriteGate {
 
         // 8. The consume, on disk before the POST leaves: a crash between the two leaves the go-ahead used.
         if (journalGoAhead !== undefined) await consumeGoAhead(paths.goAheads, journalGoAhead, source, clock);
-        if (lock.compromised()) return busy(attempt);
 
         // 9. The send; the transport's 429 backoff runs inside this await, under the lock.
         const mark = answerMark();
