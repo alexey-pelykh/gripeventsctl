@@ -97,7 +97,7 @@ capabilities:
   - id: CAP-POSTURE
     description: The disclaimer, the legitimacy page, the MCP warning and the trademark checklist ship as decided
     levels: [R, M]
-    status: planned
+    status: active
   - id: CAP-ASSUMPTION-SPIKES
     description: Every platform assumption time-boxed to one call has a recorded run before its tool ships
     levels: [M]
