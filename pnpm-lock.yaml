@@ -171,8 +171,8 @@ catalogs:
       specifier: ^10.0.1
       version: 10.0.1
     '@modelcontextprotocol/sdk':
-      specifier: ^1.32.1
-      version: 1.32.1
+      specifier: ^1.32.2
+      version: 1.32.2
     '@tony.ganchev/eslint-plugin-header':
       specifier: ^3.4.4
       version: 3.4.4
@@ -363,7 +363,7 @@ importers:
         version: link:../testing
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.32.1(zod@4.6.6)
+        version: 1.32.2(zod@4.6.6)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -394,7 +394,7 @@ importers:
         version: link:../testing
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.32.1(zod@4.6.6)
+        version: 1.32.2(zod@4.6.6)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -421,7 +421,7 @@ importers:
         version: link:../core
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.32.1(zod@4.6.6)
+        version: 1.32.2(zod@4.6.6)
       zod:
         specifier: 'catalog:'
         version: 4.6.6
@@ -446,7 +446,7 @@ importers:
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
-        version: 1.32.1(zod@4.6.6)
+        version: 1.32.2(zod@4.6.6)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -747,8 +747,8 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@modelcontextprotocol/sdk@1.32.1':
-    resolution: {integrity: sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw==}
+  '@modelcontextprotocol/sdk@1.32.2':
+    resolution: {integrity: sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==}
     engines: {node: '>=18'}
     peerDependencies:
       '@cfworker/json-schema': ^4.1.1
@@ -2114,7 +2114,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@modelcontextprotocol/sdk@1.32.1(zod@4.6.6)':
+  '@modelcontextprotocol/sdk@1.32.2(zod@4.6.6)':
     dependencies:
       '@hono/node-server': 2.1.4(hono@4.13.13)
       ajv: 8.20.0
