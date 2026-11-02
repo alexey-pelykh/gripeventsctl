@@ -18,7 +18,7 @@ catalog:
   typescript-eslint: "^8.71.1"
   eslint-config-prettier: "^10.1.8"
   "@tony.ganchev/eslint-plugin-header": "^3.4.4"
-  "@modelcontextprotocol/sdk": "^1.32.1"
+  "@modelcontextprotocol/sdk": "^1.32.2"
   zod: "^4.6.6"
   commander: "^15.0.0"
   turbo: "^2.11.7"
